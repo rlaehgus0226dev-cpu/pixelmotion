@@ -38,7 +38,10 @@
 자동 배경 제거는 본질적 한계가 큼. 결과 부족하면 Photopea 같은 외부 툴에서 누끼 후 PNG로 import 권장">?</span>
   </div>
 
-  <button id="btn-ref-toggle" title="참조 프레임 좌우 분할 보기">참조 ◫</button>
+  <span style="color:#888; font-size:12px;">참조</span>
+  <select id="ref-frame-header" title="우측에 표시할 프레임 (비어있음 = 단일 뷰)">
+    <option value="-1">비어있음</option>
+  </select>
   <button id="btn-shortcuts" title="단축키 안내 (F1)">⌨ 단축키</button>
   <div id="file-info"></div>
 </div>
@@ -172,12 +175,7 @@
       </div>
       <div id="canvas-ref">
         <canvas id="ref-canvas"></canvas>
-        <div id="ref-header">
-          <span style="color:#aaa;">참조</span>
-          <select id="ref-frame-select"></select>
-          <button id="btn-ref-close" title="참조 끄기">×</button>
-        </div>
-        <div id="ref-empty" class="hidden">참조할 프레임을 선택하세요</div>
+        <div id="ref-label">참조 (읽기 전용)</div>
       </div>
     </div>
     <div id="timeline">

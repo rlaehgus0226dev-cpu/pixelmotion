@@ -2,22 +2,35 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   frames: [],              // [{ source, original, pixelized, fileName, traceLayer }]
-  frameIdx: 0,
+  // 두 슬롯 — 좌(0), 우(1). 우측은 frameIdx=-1이면 비활성(단일 뷰)
+  slots: [
+    { frameIdx: 0, layout: null },
+    { frameIdx: -1, layout: null },
+  ],
+  activeSlot: 0,           // 마우스 hover/마지막 클릭 슬롯
   selection: null,
   draftSelection: null,
-  layout: null,
   zoom: "fit",
   panX: 0,
   panY: 0,
   activeColor: [0, 0, 0],
   palette: [],
-  tracing: false,          // 트레이싱 모드 ON/OFF
-  guideOpacity: 0.5,       // 가이드(원본) 투명도 0~1
+  tracing: false,
+  guideOpacity: 0.5,
 };
+
+// frameIdx, layout은 active slot의 alias
+Object.defineProperty(state, "frameIdx", {
+  get() { return state.slots[state.activeSlot]?.frameIdx ?? 0; },
+  set(v) { const s = state.slots[state.activeSlot]; if (s) s.frameIdx = v; },
+});
+Object.defineProperty(state, "layout", {
+  get() { return state.slots[state.activeSlot]?.layout ?? null; },
+  set(v) { const s = state.slots[state.activeSlot]; if (s) s.layout = v; },
+});
 
 // 함수에서 참조하는 모듈 변수들 — 위로 끌어올려서 TDZ 회피
 let _clipboard = null;
-let _refFrameIdx = -1;
 
 // state.source / original / pixelized / fileName 은 현재 프레임의 alias
 Object.defineProperty(state, "source", {
@@ -124,19 +137,20 @@ function getGridSize() { return parseInt(document.querySelector('input[name="gri
 function getColorLimit() { return parseInt(document.querySelector('input[name="color"]:checked').value, 10); }
 function showGrid() { return $("show-grid").checked; }
 
-function fitCanvas() {
-  const stage = $("stage");
+function fitCanvasEl(canvasEl, ctxEl) {
+  const parent = canvasEl.parentElement;
   const dpr = window.devicePixelRatio || 1;
-  const w = stage.clientWidth;
-  const h = stage.clientHeight;
-  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h * dpr);
+  const w = parent.clientWidth;
+  const h = parent.clientHeight;
+  if (canvasEl.width !== Math.round(w * dpr) || canvasEl.height !== Math.round(h * dpr)) {
+    canvasEl.width = Math.round(w * dpr);
+    canvasEl.height = Math.round(h * dpr);
   }
-  canvas.style.width = w + "px";
-  canvas.style.height = h + "px";
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  canvasEl.style.width = w + "px";
+  canvasEl.style.height = h + "px";
+  ctxEl.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
+function fitCanvas() { fitCanvasEl(canvas, ctx); }
 
 let _sourceCanvasCache = { imgData: null, canvas: null };
 function imageDataToCanvas(imgData) {
@@ -161,14 +175,17 @@ function freshCanvas(imgData) {
 function bumpSource() { /* 캐시가 참조 비교로 바뀌어 더 이상 필요 없음 */ }
 function invalidateSourceCache() { _sourceCanvasCache = { imgData: null, canvas: null }; }
 
-function drawCheckerboard(x, y, w, h, tile = 10) {
+function drawCheckerboardOn(c, x, y, w, h, tile = 10) {
   for (let py = 0; py < h; py += tile) {
     for (let px = 0; px < w; px += tile) {
       const dark = ((Math.floor(px / tile) + Math.floor(py / tile)) % 2) === 1;
-      ctx.fillStyle = dark ? "#aaaaaa" : "#dcdcdc";
-      ctx.fillRect(x + px, y + py, Math.min(tile, w - px), Math.min(tile, h - py));
+      c.fillStyle = dark ? "#aaaaaa" : "#dcdcdc";
+      c.fillRect(x + px, y + py, Math.min(tile, w - px), Math.min(tile, h - py));
     }
   }
+}
+function drawCheckerboard(x, y, w, h, tile = 10) {
+  drawCheckerboardOn(ctx, x, y, w, h, tile);
 }
 
 function drawGrid(x, y, w, h) {
@@ -257,33 +274,53 @@ function drawGrid(x, y, w, h) {
 }
 
 function redraw() {
-  fitCanvas();
-  const cw = canvas.clientWidth;
-  const ch = canvas.clientHeight;
-  ctx.fillStyle = "#1e1e1e";
-  ctx.fillRect(0, 0, cw, ch);
-
+  drawSlot(0, canvas, ctx);
+  if (state.slots[1].frameIdx >= 0) {
+    drawSlot(1, refCanvas, refCtx);
+  }
+  // 활성 슬롯 정보로 badge / file-info 갱신
+  const af = state.frames[state.slots[state.activeSlot]?.frameIdx ?? 0];
   const badge = $("badge");
-  if (!state.source) {
+  if (af && af.source) {
+    badge.textContent = `${af.source.width} × ${af.source.height} px`;
+    badge.classList.remove("hidden");
+    $("file-info").textContent = `${af.fileName || ""} · ${af.source.width} × ${af.source.height} px`;
+  } else {
     badge.classList.add("hidden");
+    $("file-info").textContent = "";
+  }
+}
+
+function drawSlot(slotIdx, canvasEl, ctxEl) {
+  fitCanvasEl(canvasEl, ctxEl);
+  const cw = canvasEl.clientWidth;
+  const ch = canvasEl.clientHeight;
+  ctxEl.fillStyle = "#1e1e1e";
+  ctxEl.fillRect(0, 0, cw, ch);
+
+  const slot = state.slots[slotIdx];
+  if (!slot) return;
+  const f = state.frames[slot.frameIdx];
+  if (!f || !f.source) {
+    slot.layout = null;
     return;
   }
+  const src = f.source;
+  const iw = src.width;
+  const ih = src.height;
 
-  const iw = state.source.width;
-  const ih = state.source.height;
   let dw, dh, x, y;
   if (state.zoom === "fit") {
-    if (state.pixelized) {
+    if (f.pixelized) {
       const ps = Math.max(1, Math.min(Math.floor(cw * 0.95 / iw), Math.floor(ch * 0.95 / ih)));
-      dw = iw * ps;
-      dh = ih * ps;
-      ctx.imageSmoothingEnabled = false;
+      dw = iw * ps; dh = ih * ps;
+      ctxEl.imageSmoothingEnabled = false;
     } else {
       const scale = Math.min(cw / iw, ch / ih) * 0.95;
       dw = Math.max(1, Math.floor(iw * scale));
       dh = Math.max(1, Math.floor(ih * scale));
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
+      ctxEl.imageSmoothingEnabled = true;
+      ctxEl.imageSmoothingQuality = "high";
     }
     x = Math.floor((cw - dw) / 2);
     y = Math.floor((ch - dh) / 2);
@@ -293,58 +330,182 @@ function redraw() {
     dh = Math.max(1, Math.round(ih * z));
     x = Math.round((cw - dw) / 2 + state.panX);
     y = Math.round((ch - dh) / 2 + state.panY);
-    ctx.imageSmoothingEnabled = false;
+    ctxEl.imageSmoothingEnabled = false;
+  }
+  slot.layout = { x, y, dw, dh, iw, ih };
+
+  drawCheckerboardOn(ctxEl, x, y, dw, dh);
+
+  // 어니언 스킨 — 활성 슬롯에서만
+  if (slotIdx === state.activeSlot) {
+    const onionEl = $("tl-onion");
+    if (onionEl && onionEl.checked && state.frames.length > 1) {
+      const prevIdx = (slot.frameIdx - 1 + state.frames.length) % state.frames.length;
+      const nextIdx = (slot.frameIdx + 1) % state.frames.length;
+      ctxEl.save();
+      if (prevIdx !== slot.frameIdx) {
+        const prev = state.frames[prevIdx];
+        if (prev && prev.source) {
+          ctxEl.globalAlpha = 0.35;
+          ctxEl.drawImage(imageDataToCanvas2(prev.source), x, y, dw, dh);
+          if (prev.traceLayer) ctxEl.drawImage(imageDataToCanvas2(prev.traceLayer), x, y, dw, dh);
+        }
+      }
+      if (nextIdx !== slot.frameIdx && nextIdx !== prevIdx) {
+        const next = state.frames[nextIdx];
+        if (next && next.source) {
+          ctxEl.globalAlpha = 0.25;
+          ctxEl.drawImage(imageDataToCanvas2(next.source), x, y, dw, dh);
+          if (next.traceLayer) ctxEl.drawImage(imageDataToCanvas2(next.traceLayer), x, y, dw, dh);
+        }
+      }
+      ctxEl.restore();
+    }
   }
 
-  drawCheckerboard(x, y, dw, dh);
-
-  // 어니언 스킨 (이전/다음 프레임의 source+traceLayer 합쳐서 반투명)
-  const onionEl = $("tl-onion");
-  if (onionEl && onionEl.checked && state.frames.length > 1) {
-    const prevIdx = (state.frameIdx - 1 + state.frames.length) % state.frames.length;
-    const nextIdx = (state.frameIdx + 1) % state.frames.length;
-    ctx.save();
-    if (prevIdx !== state.frameIdx) {
-      const prev = state.frames[prevIdx];
-      if (prev && prev.source) {
-        ctx.globalAlpha = 0.35;
-        ctx.drawImage(imageDataToCanvas2(prev.source), x, y, dw, dh);
-        if (prev.traceLayer) ctx.drawImage(imageDataToCanvas2(prev.traceLayer), x, y, dw, dh);
-      }
-    }
-    if (nextIdx !== state.frameIdx && nextIdx !== prevIdx) {
-      const next = state.frames[nextIdx];
-      if (next && next.source) {
-        ctx.globalAlpha = 0.25;
-        ctx.drawImage(imageDataToCanvas2(next.source), x, y, dw, dh);
-        if (next.traceLayer) ctx.drawImage(imageDataToCanvas2(next.traceLayer), x, y, dw, dh);
-      }
-    }
-    ctx.restore();
-  }
-
-  // 원본 (가이드) — 트레이싱 모드면 투명도 적용
-  const guideAlpha = state.tracing ? state.guideOpacity : 1.0;
+  // 원본 + 트레이싱
+  const guideAlpha = (state.tracing && slotIdx === state.activeSlot) ? state.guideOpacity : 1.0;
   if (guideAlpha > 0) {
-    ctx.save();
-    ctx.globalAlpha = guideAlpha;
-    ctx.drawImage(imageDataToCanvas(state.source), x, y, dw, dh);
-    ctx.restore();
+    ctxEl.save();
+    ctxEl.globalAlpha = guideAlpha;
+    // 슬롯 0이면 캐시된 imageDataToCanvas (메인) 사용해도 같음
+    ctxEl.drawImage(imageDataToCanvas2(src), x, y, dw, dh);
+    ctxEl.restore();
   }
-  // 트레이스 레이어 — 항상 불투명
-  const curFrame = state.frames[state.frameIdx];
-  if (curFrame && curFrame.traceLayer) {
-    ctx.drawImage(imageDataToCanvas2(curFrame.traceLayer), x, y, dw, dh);
+  if (f.traceLayer) {
+    ctxEl.drawImage(imageDataToCanvas2(f.traceLayer), x, y, dw, dh);
   }
 
-  if (showGrid()) drawGrid(x, y, dw, dh);
+  // 격자
+  if ($("show-grid").checked) {
+    drawGridInternal(ctxEl, slotIdx, x, y, dw, dh);
+  }
 
-  state.layout = { x, y, dw, dh, iw, ih };
-  drawSelection();
+  // 선택 영역 — 활성 슬롯에만
+  if (slotIdx === state.activeSlot) {
+    drawSelectionInternal(ctxEl, slotIdx);
+  }
 
-  badge.textContent = `${iw} × ${ih} px`;
-  badge.classList.remove("hidden");
-  $("file-info").textContent = `${state.fileName} · ${iw} × ${ih} px`;
+  // 활성 슬롯 강조 (분할 모드일 때)
+  if (state.slots[1].frameIdx >= 0 && slotIdx === state.activeSlot) {
+    ctxEl.save();
+    ctxEl.strokeStyle = "#4a8";
+    ctxEl.lineWidth = 2;
+    ctxEl.strokeRect(1, 1, cw - 2, ch - 2);
+    ctxEl.restore();
+  }
+}
+
+function drawGridInternal(ctxEl, slotIdx, x, y, w, h) {
+  const sub = getSub();
+  const showSub = $("show-subgrid").checked;
+  const slot = state.slots[slotIdx];
+  const f = slot ? state.frames[slot.frameIdx] : null;
+
+  if (!showSub && sub > 1) {
+    const baseN = getGridSize();
+    let bc, br;
+    if (f && f.pixelized && f.source) {
+      bc = Math.max(1, Math.round(f.source.width / sub));
+      br = Math.max(1, Math.round(f.source.height / sub));
+    } else if (f && f.source) {
+      const d = gridDims(f.source.width, f.source.height, baseN);
+      bc = d.cols; br = d.rows;
+    } else {
+      bc = br = baseN;
+    }
+    ctxEl.strokeStyle = "#000";
+    ctxEl.lineWidth = 1;
+    ctxEl.beginPath();
+    for (let i = 0; i <= bc; i++) {
+      const gx = Math.round(x + w * i / bc) + 0.5;
+      ctxEl.moveTo(gx, y); ctxEl.lineTo(gx, y + h);
+    }
+    for (let j = 0; j <= br; j++) {
+      const gy = Math.round(y + h * j / br) + 0.5;
+      ctxEl.moveTo(x, gy); ctxEl.lineTo(x + w, gy);
+    }
+    ctxEl.stroke();
+    return;
+  }
+
+  let cols, rows;
+  if (f && f.source) {
+    if (f.pixelized) {
+      cols = f.source.width;
+      rows = f.source.height;
+    } else {
+      const dims = gridDims(f.source.width, f.source.height, getGridSize() * sub);
+      cols = dims.cols; rows = dims.rows;
+    }
+  } else {
+    cols = rows = getGridSize() * sub;
+  }
+
+  ctxEl.strokeStyle = "#000";
+  ctxEl.lineWidth = 1;
+  ctxEl.beginPath();
+  for (let i = 0; i <= cols; i++) {
+    if (sub > 1 && i % sub === 0) continue;
+    const gx = Math.round(x + w * i / cols) + 0.5;
+    ctxEl.moveTo(gx, y); ctxEl.lineTo(gx, y + h);
+  }
+  for (let j = 0; j <= rows; j++) {
+    if (sub > 1 && j % sub === 0) continue;
+    const gy = Math.round(y + h * j / rows) + 0.5;
+    ctxEl.moveTo(x, gy); ctxEl.lineTo(x + w, gy);
+  }
+  ctxEl.stroke();
+
+  if (sub > 1) {
+    ctxEl.strokeStyle = "#ff3344";
+    ctxEl.lineWidth = 1;
+    ctxEl.beginPath();
+    for (let i = 0; i <= cols; i += sub) {
+      const gx = Math.round(x + w * i / cols) + 0.5;
+      ctxEl.moveTo(gx, y); ctxEl.lineTo(gx, y + h);
+    }
+    for (let j = 0; j <= rows; j += sub) {
+      const gy = Math.round(y + h * j / rows) + 0.5;
+      ctxEl.moveTo(x, gy); ctxEl.lineTo(x + w, gy);
+    }
+    ctxEl.stroke();
+  }
+}
+
+function drawSelectionInternal(ctxEl, slotIdx) {
+  const isDraft = !!state.draftSelection;
+  const sel = state.draftSelection || state.selection;
+  const slot = state.slots[slotIdx];
+  if (!sel || !slot || !slot.layout) return;
+  const { x, y, dw, dh, iw, ih } = slot.layout;
+  ctxEl.save();
+  ctxEl.strokeStyle = "#ffaa00";
+  ctxEl.lineWidth = 1;
+  ctxEl.setLineDash([5, 3]);
+  if (sel.type === "rect") {
+    const sx1 = Math.min(sel.x1, sel.x2);
+    const sy1 = Math.min(sel.y1, sel.y2);
+    const sx2 = Math.max(sel.x1, sel.x2);
+    const sy2 = Math.max(sel.y1, sel.y2);
+    const px1 = x + sx1 / iw * dw;
+    const py1 = y + sy1 / ih * dh;
+    const px2 = x + sx2 / iw * dw;
+    const py2 = y + sy2 / ih * dh;
+    ctxEl.strokeRect(Math.round(px1) + 0.5, Math.round(py1) + 0.5, Math.round(px2 - px1), Math.round(py2 - py1));
+  } else if (sel.type === "lasso" && sel.points.length > 1) {
+    ctxEl.beginPath();
+    sel.points.forEach((p, i) => {
+      const px = x + p.x / iw * dw;
+      const py = y + p.y / ih * dh;
+      if (i === 0) ctxEl.moveTo(px, py);
+      else ctxEl.lineTo(px, py);
+    });
+    if (!isDraft) ctxEl.closePath();
+    ctxEl.stroke();
+  }
+  ctxEl.setLineDash([]);
+  ctxEl.restore();
 }
 
 // ---------- 이미지/프레임 로드 ----------
@@ -1094,12 +1255,16 @@ function getBoundsMode() {
   return "touch";  // 옵션 제거 — 항상 걸침 동작
 }
 
-function canvasToImageCoord(e) {
-  if (!state.source || !state.layout) return null;
-  const rect = canvas.getBoundingClientRect();
+function canvasToImageCoord(e, slotIdx = state.activeSlot) {
+  const slot = state.slots[slotIdx];
+  if (!slot || !slot.layout) return null;
+  const f = state.frames[slot.frameIdx];
+  if (!f) return null;
+  const canvasEl = slotIdx === 0 ? canvas : refCanvas;
+  const rect = canvasEl.getBoundingClientRect();
   const cx = e.clientX - rect.left;
   const cy = e.clientY - rect.top;
-  const { x, y, dw, dh, iw, ih } = state.layout;
+  const { x, y, dw, dh, iw, ih } = slot.layout;
   const ix = (cx - x) / dw * iw;
   const iy = (cy - y) / dh * ih;
   return { ix, iy };
@@ -1142,9 +1307,19 @@ window.addEventListener("blur", () => {
   if (!isPanning) canvas.style.cursor = "";
 });
 
-canvas.addEventListener("mousedown", (e) => {
+function setActiveSlot(slotIdx) {
+  if (state.activeSlot === slotIdx) return false;
+  state.activeSlot = slotIdx;
+  redraw();
+  return true;
+}
+
+function onCanvasMouseDown(e, slotIdx) {
+  // 슬롯 1이 비활성(frameIdx<0)이면 클릭 무시
+  if (slotIdx === 1 && state.slots[1].frameIdx < 0) return;
+  setActiveSlot(slotIdx);
   const tool = getTool();
-  // 팬 우선: 미들버튼 / Space / Ctrl+Shift / 손바닥 도구
+  // 팬 우선: 미들버튼 / Space / Ctrl+Shift
   const wantsPan = e.button === 1
     || (spaceHeld && e.button === 0)
     || (ctrlShiftHeld && e.button === 0);
@@ -1156,11 +1331,11 @@ canvas.addEventListener("mousedown", (e) => {
     }
     isPanning = true;
     panStart = { x: e.clientX - state.panX, y: e.clientY - state.panY };
-    canvas.style.cursor = "grabbing";
+    (slotIdx === 0 ? canvas : refCanvas).style.cursor = "grabbing";
     return;
   }
   if (e.button !== 0) return;
-  const p = canvasToImageCoord(e);
+  const p = canvasToImageCoord(e, slotIdx);
   if (!p) return;
   if (tool === "pick") {
     pickColorAt(Math.floor(p.ix), Math.floor(p.iy));
@@ -1198,9 +1373,11 @@ canvas.addEventListener("mousedown", (e) => {
     state.draftSelection = { type: "lasso", points: [{ x: p.ix, y: p.iy }] };
   }
   redraw();
-});
+}
+canvas.addEventListener("mousedown", (e) => onCanvasMouseDown(e, 0));
+// refCanvas mousedown 등록은 refCanvas 변수가 선언된 후 (아래에서)
 
-canvas.addEventListener("mousemove", (e) => {
+window.addEventListener("mousemove", (e) => {
   if (isPanning) {
     state.panX = e.clientX - panStart.x;
     state.panY = e.clientY - panStart.y;
@@ -1227,7 +1404,7 @@ canvas.addEventListener("mousemove", (e) => {
   redraw();
 });
 
-canvas.addEventListener("mouseup", (e) => {
+window.addEventListener("mouseup", (e) => {
   if (isPanning) {
     isPanning = false;
     canvas.style.cursor = (spaceHeld || ctrlShiftHeld) ? "grab" : "";
@@ -1248,28 +1425,6 @@ canvas.addEventListener("mouseup", (e) => {
       state.draftSelection = null;
     }
     redraw();
-  }
-});
-canvas.addEventListener("mouseleave", () => {
-  if (isPanning) {
-    isPanning = false;
-    canvas.style.cursor = (spaceHeld || ctrlShiftHeld) ? "grab" : "";
-  }
-  if (pixelDragging) {
-    pixelDragging = false;
-    pixelLast = null;
-  }
-  if (dragging) {
-    dragging = false;
-    if (state.draftSelection) {
-      if (state.draftSelection.type === "lasso" && state.draftSelection.points.length < 3) {
-        state.draftSelection = null;
-      } else {
-        state.selection = state.draftSelection;
-        state.draftSelection = null;
-      }
-      redraw();
-    }
   }
 });
 
@@ -2351,21 +2506,37 @@ function pasteClipboard() {
   setStatus(`붙여넣기 ${pasted}px`, "success");
 }
 
-// ---------- 참조 캔버스 ----------
+// ---------- 참조 캔버스 (슬롯 1) ----------
 const refCanvas = $("ref-canvas");
 const refCtx = refCanvas.getContext("2d");
+refCanvas.addEventListener("mousedown", (e) => onCanvasMouseDown(e, 1));
+
+// 마우스 hover로 활성 슬롯 자동 전환 (드래그 중에는 변경 안 함)
+canvas.addEventListener("mouseenter", () => {
+  if (!isPanning && !pixelDragging && !dragging) setActiveSlot(0);
+});
+refCanvas.addEventListener("mouseenter", () => {
+  if (state.slots[1].frameIdx < 0) return;
+  if (!isPanning && !pixelDragging && !dragging) setActiveSlot(1);
+});
 
 function renderRefFrameOptions() {
-  const select = $("ref-frame-select");
-  select.innerHTML = "";
+  const select = $("ref-frame-header");
+  if (!select) return;
+  const prev = select.value;
+  select.innerHTML = '<option value="-1">비어있음</option>';
   state.frames.forEach((f, i) => {
     const opt = document.createElement("option");
     opt.value = i;
     opt.textContent = `프레임 ${i + 1}${i === state.frameIdx ? " (현재)" : ""}`;
     select.appendChild(opt);
   });
-  if (_refFrameIdx >= 0 && _refFrameIdx < state.frames.length) {
-    select.value = _refFrameIdx;
+  // 현재 슬롯 1 frameIdx 복원
+  const refIdx = state.slots[1].frameIdx;
+  if (refIdx >= 0 && refIdx < state.frames.length) {
+    select.value = refIdx;
+  } else {
+    select.value = "-1";
   }
 }
 
@@ -2384,20 +2555,16 @@ function fitCanvas2(canvas, ctx) {
 }
 
 function renderRefCanvas() {
-  if (!document.body.classList.contains("ref-on")) return;
+  // drawSlot(1)이 redraw에서 처리. 호환성용 빈 함수.
+  if (false) {  // 더 이상 사용 안 함
   fitCanvas2(refCanvas, refCtx);
   const cw = refCanvas.clientWidth;
   const ch = refCanvas.clientHeight;
   refCtx.fillStyle = "#1a1a1a";
   refCtx.fillRect(0, 0, cw, ch);
-
-  const empty = $("ref-empty");
-  if (_refFrameIdx < 0 || _refFrameIdx >= state.frames.length) {
-    empty.classList.remove("hidden");
-    return;
-  }
-  empty.classList.add("hidden");
-  const f = state.frames[_refFrameIdx];
+  const refIdx = state.slots[1].frameIdx;
+  if (refIdx < 0 || refIdx >= state.frames.length) return;
+  const f = state.frames[refIdx];
   if (!f || !f.source) return;
 
   const iw = f.source.width;
@@ -2418,28 +2585,21 @@ function renderRefCanvas() {
   }
   refCtx.drawImage(imageDataToCanvas2(f.source), x, y, dw, dh);
   if (f.traceLayer) refCtx.drawImage(imageDataToCanvas2(f.traceLayer), x, y, dw, dh);
+  }  // if (false) 닫음
 }
 
-$("btn-ref-toggle").addEventListener("click", () => {
-  document.body.classList.toggle("ref-on");
-  const on = document.body.classList.contains("ref-on");
-  if (on) {
-    if (_refFrameIdx < 0 && state.frames.length > 0) {
-      _refFrameIdx = state.frameIdx === 0 && state.frames.length > 1 ? 1 : 0;
-    }
-    renderRefFrameOptions();
-    setTimeout(() => { redraw(); renderRefCanvas(); }, 220);
+$("ref-frame-header")?.addEventListener("change", (e) => {
+  const idx = parseInt(e.target.value, 10);
+  state.slots[1].frameIdx = idx;
+  if (idx < 0) {
+    document.body.classList.remove("ref-on");
+    setTimeout(() => redraw(), 220);
   } else {
-    setTimeout(redraw, 220);
+    document.body.classList.add("ref-on");
+    setTimeout(() => { redraw(); renderRefCanvas(); }, 220);
   }
-});
-$("btn-ref-close").addEventListener("click", () => {
-  document.body.classList.remove("ref-on");
-  setTimeout(redraw, 220);
-});
-$("ref-frame-select").addEventListener("change", (e) => {
-  _refFrameIdx = parseInt(e.target.value, 10);
-  renderRefCanvas();
+  // Space/단축키가 select에 잡히지 않도록 포커스 해제
+  e.target.blur();
 });
 window.addEventListener("resize", () => {
   if (document.body.classList.contains("ref-on")) renderRefCanvas();
