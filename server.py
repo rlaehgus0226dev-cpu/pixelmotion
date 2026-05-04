@@ -1,11 +1,20 @@
 import io
 import os
+import sys
+import threading
+import time
+import webbrowser
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse
 
 
 PORT = 8765
-ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# PyInstaller --onefile 환경: 정적 파일이 sys._MEIPASS 안에 풀림
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    ROOT = sys._MEIPASS
+else:
+    ROOT = os.path.dirname(os.path.abspath(__file__))
 
 _sessions = {}
 
@@ -73,10 +82,25 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(msg)
 
 
+def _open_browser():
+    time.sleep(1.0)
+    try:
+        webbrowser.open(f"http://127.0.0.1:{PORT}/")
+    except Exception:
+        pass
+
+
 def main() -> None:
     addr = ("127.0.0.1", PORT)
-    print(f"PixelMotion: http://127.0.0.1:{PORT}/")
-    HTTPServer(addr, Handler).serve_forever()
+    url = f"http://127.0.0.1:{PORT}/"
+    print(f"PixelMotion: {url}")
+    print("브라우저가 자동으로 열립니다. 안 열리면 위 주소로 접속하세요.")
+    print("종료: 콘솔 창 닫거나 Ctrl+C")
+    threading.Thread(target=_open_browser, daemon=True).start()
+    try:
+        HTTPServer(addr, Handler).serve_forever()
+    except KeyboardInterrupt:
+        print("\n종료")
 
 
 if __name__ == "__main__":

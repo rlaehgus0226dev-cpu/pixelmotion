@@ -38,6 +38,7 @@
 자동 배경 제거는 본질적 한계가 큼. 결과 부족하면 Photopea 같은 외부 툴에서 누끼 후 PNG로 import 권장">?</span>
   </div>
 
+  <button id="btn-shortcuts" title="단축키 안내 (F1)">⌨ 단축키</button>
   <div id="file-info"></div>
 </div>
 
@@ -153,6 +154,12 @@
     <div id="stage">
       <canvas id="canvas"></canvas>
       <div id="badge" class="hidden"></div>
+      <div id="toast"></div>
+      <div id="empty-state">
+        <div class="empty-title">PixelMotion</div>
+        <div class="empty-sub">상단 [+ 이미지 추가]로 시작하세요</div>
+        <div class="empty-hint">여러 장 동시 선택 시 프레임으로 자동 추가</div>
+      </div>
       <div id="zoom-ctrl">
         <button id="btn-zoom-out" title="축소 (-)">−</button>
         <span id="zoom-display">FIT</span>
@@ -163,12 +170,14 @@
     </div>
     <div id="timeline">
       <div id="timeline-controls">
-        <label class="button" for="file-input" style="padding:4px 10px;">+ 프레임</label>
-        <button id="tl-remove" title="현재 프레임 삭제">×</button>
-        <button id="tl-prev" title="이전 프레임">◀</button>
-        <button id="tl-next" title="다음 프레임">▶▶</button>
-        <button id="tl-play" title="재생">▶</button>
-        <button id="tl-stop" title="정지" disabled>⏸</button>
+        <label class="button" for="file-input" title="여러 이미지 선택 시 모두 프레임으로 추가">+ 프레임</label>
+        <button id="tl-remove" title="현재 프레임 삭제">삭제</button>
+        <div class="topbar-divider"></div>
+        <button id="tl-prev" title="이전 프레임">◀ 이전</button>
+        <button id="tl-next" title="다음 프레임">다음 ▶</button>
+        <div class="topbar-divider"></div>
+        <button id="tl-play" title="재생">▶ 재생</button>
+        <button id="tl-stop" title="정지" disabled>⏸ 정지</button>
         <label>FPS <input type="number" id="tl-fps" value="12" min="1" max="60"></label>
         <label class="checkbox"><input type="checkbox" id="tl-onion">어니언 스킨</label>
         <span id="tl-info" class="modal-info" style="margin-left:auto;">프레임 0개</span>
@@ -177,6 +186,8 @@
     </div>
     <div id="status">이미지를 열어주세요</div>
   </div>
+
+  <button id="btn-toggle-right" title="우측 패널 접기/펼치기">▶</button>
 
   <div id="rightpanel">
     <div class="group">
@@ -231,6 +242,37 @@
       </div>
       <div class="row" style="border-top:1px solid #3a3a3a; padding-top:8px; margin-top:4px;">
         <button id="btn-flip-h" style="width:100%;" title="8방향 작업 시 한 방향 결과를 반전해서 반대 방향 생성">↔ 좌우 반전</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-header">
+        <span class="group-title">트레이싱</span>
+        <span class="help-icon" data-help="원본 이미지를 가이드로 깔고 그 위에 사용자가 직접 그리는 모드.
+어니언 스킨 + 멀티프레임과 결합하면 모션 작업이 됩니다.
+
+트레이싱 모드 ON
+  • 브러시/지우개가 별도 트레이스 레이어에만 적용 (원본 안 건드림)
+  • 가이드(원본)는 투명도 조절 가능
+
+가이드 투명도
+  • 0% = 원본 안 보임 (빈 캔버스에 그리기)
+  • 50% = 원본 살짝 비침 (트레이싱)
+  • 100% = 원본 그대로 (참고만)
+
+트레이스 지우기 — 현재 프레임의 트레이스만 클리어 (원본 보존)
+
+저장 시 출력 모드 — 원본만 / 트레이스만 / 합친 결과 중 선택">?</span>
+      </div>
+      <div class="row">
+        <label class="checkbox"><input type="checkbox" id="tracing-mode">트레이싱 모드</label>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">가이드 투명도 <span id="guide-opacity-val" style="color:#4a8;">50%</span></span>
+        <input type="range" id="guide-opacity" min="0" max="100" value="50" style="width:100%;">
+      </div>
+      <div class="row">
+        <button id="btn-clear-trace" style="width:100%;">현재 트레이스 지우기</button>
       </div>
     </div>
 

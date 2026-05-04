@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  frames: [],              // [{ source, original, pixelized, fileName }]
+  frames: [],              // [{ source, original, pixelized, fileName, traceLayer }]
   frameIdx: 0,
   selection: null,
   draftSelection: null,
@@ -11,6 +11,8 @@ const state = {
   panY: 0,
   activeColor: [0, 0, 0],
   palette: [],
+  tracing: false,          // 트레이싱 모드 ON/OFF
+  guideOpacity: 0.5,       // 가이드(원본) 투명도 0~1
 };
 
 // state.source / original / pixelized / fileName 은 현재 프레임의 alias
@@ -35,10 +37,13 @@ const history = [];
 const HISTORY_LIMIT = 20;
 
 function snapshot() {
+  const f = state.frames[state.frameIdx];
   history.push({
-    original: state.original,
-    source: state.source,
-    pixelized: state.pixelized,
+    frameIdx: state.frameIdx,
+    original: f ? f.original : null,
+    source: f ? f.source : null,
+    pixelized: f ? f.pixelized : false,
+    traceLayer: f ? f.traceLayer : null,
   });
   if (history.length > HISTORY_LIMIT) history.shift();
   updateUndoButton();
@@ -47,10 +52,18 @@ function snapshot() {
 function undo() {
   if (history.length === 0) return;
   const s = history.pop();
-  state.original = s.original;
-  state.source = s.source;
-  state.pixelized = s.pixelized;
-  bumpSource();
+  if (s.frameIdx >= 0 && s.frameIdx < state.frames.length) {
+    state.frameIdx = s.frameIdx;
+    const f = state.frames[s.frameIdx];
+    if (f) {
+      f.original = s.original;
+      f.source = s.source;
+      f.pixelized = s.pixelized;
+      f.traceLayer = s.traceLayer;
+    }
+  }
+  invalidateSourceCache();
+  renderTimeline();
   redraw();
   updateUndoButton();
   setStatus("되돌림");
@@ -68,7 +81,41 @@ function updateUndoButton() {
 const canvas = $("canvas");
 const ctx = canvas.getContext("2d");
 
-function setStatus(text) { $("status").textContent = text; }
+let _statusClearTimer = null;
+let _toastClearTimer = null;
+function setStatus(text, type = "") {
+  // 하단 status (보조)
+  const el = $("status");
+  el.textContent = text;
+  el.className = type;
+  if (_statusClearTimer) { clearTimeout(_statusClearTimer); _statusClearTimer = null; }
+  if (type === "success") {
+    _statusClearTimer = setTimeout(() => {
+      if (el.textContent === text) { el.textContent = ""; el.className = ""; }
+    }, 3000);
+  }
+
+  // 캔버스 위 toast (주된 표시)
+  const toast = $("toast");
+  if (toast) {
+    if (_toastClearTimer) { clearTimeout(_toastClearTimer); _toastClearTimer = null; }
+    if (text) {
+      toast.textContent = text;
+      toast.className = "show " + type;
+      if (type === "success") {
+        _toastClearTimer = setTimeout(() => { toast.className = ""; }, 2000);
+      } else if (type === "error") {
+        _toastClearTimer = setTimeout(() => { toast.className = ""; }, 4000);
+      } else if (type !== "processing") {
+        // 일반 info (되돌림, 선택 해제 등): 짧게 1.5초
+        _toastClearTimer = setTimeout(() => { toast.className = ""; }, 1500);
+      }
+      // processing은 명시 변경 전까지 유지
+    } else {
+      toast.className = "";
+    }
+  }
+}
 function getGridSize() { return parseInt(document.querySelector('input[name="grid"]:checked').value, 10); }
 function getColorLimit() { return parseInt(document.querySelector('input[name="color"]:checked').value, 10); }
 function showGrid() { return $("show-grid").checked; }
@@ -247,7 +294,7 @@ function redraw() {
 
   drawCheckerboard(x, y, dw, dh);
 
-  // 어니언 스킨 (이전/다음 프레임을 반투명 겹침)
+  // 어니언 스킨 (이전/다음 프레임의 source+traceLayer 합쳐서 반투명)
   const onionEl = $("tl-onion");
   if (onionEl && onionEl.checked && state.frames.length > 1) {
     const prevIdx = (state.frameIdx - 1 + state.frames.length) % state.frames.length;
@@ -258,6 +305,7 @@ function redraw() {
       if (prev && prev.source) {
         ctx.globalAlpha = 0.35;
         ctx.drawImage(imageDataToCanvas2(prev.source), x, y, dw, dh);
+        if (prev.traceLayer) ctx.drawImage(imageDataToCanvas2(prev.traceLayer), x, y, dw, dh);
       }
     }
     if (nextIdx !== state.frameIdx && nextIdx !== prevIdx) {
@@ -265,12 +313,25 @@ function redraw() {
       if (next && next.source) {
         ctx.globalAlpha = 0.25;
         ctx.drawImage(imageDataToCanvas2(next.source), x, y, dw, dh);
+        if (next.traceLayer) ctx.drawImage(imageDataToCanvas2(next.traceLayer), x, y, dw, dh);
       }
     }
     ctx.restore();
   }
 
-  ctx.drawImage(imageDataToCanvas(state.source), x, y, dw, dh);
+  // 원본 (가이드) — 트레이싱 모드면 투명도 적용
+  const guideAlpha = state.tracing ? state.guideOpacity : 1.0;
+  if (guideAlpha > 0) {
+    ctx.save();
+    ctx.globalAlpha = guideAlpha;
+    ctx.drawImage(imageDataToCanvas(state.source), x, y, dw, dh);
+    ctx.restore();
+  }
+  // 트레이스 레이어 — 항상 불투명
+  const curFrame = state.frames[state.frameIdx];
+  if (curFrame && curFrame.traceLayer) {
+    ctx.drawImage(imageDataToCanvas2(curFrame.traceLayer), x, y, dw, dh);
+  }
 
   if (showGrid()) drawGrid(x, y, dw, dh);
 
@@ -307,6 +368,7 @@ function addFrame(imgData, fileName) {
     original: imgData,
     pixelized: false,
     fileName: fileName || `frame_${state.frames.length + 1}`,
+    traceLayer: null,  // ImageData (사용자가 트레이싱 모드에서 그리면 lazy 생성)
   });
   state.frameIdx = state.frames.length - 1;
   state.selection = null;
@@ -767,25 +829,46 @@ function pixelizeFrame(frame) {
   else if (om === "coarse") result = addOutlineCoarse(result, getSub());
   frame.source = result;
   frame.pixelized = true;
+  // traceLayer 사이즈를 새 source에 맞춤 (NEAREST 보간)
+  if (frame.traceLayer && (frame.traceLayer.width !== result.width || frame.traceLayer.height !== result.height)) {
+    frame.traceLayer = resizeImageDataNearest(frame.traceLayer, result.width, result.height);
+  }
 }
 
-function applyPixelize() {
+async function applyPixelize() {
   if (state.frames.length === 0) {
-    setStatus("이미지를 먼저 추가하세요");
+    setStatus("이미지를 먼저 추가하세요", "error");
     return;
   }
   const range = getApplyRange();
-  if (range === "all") {
-    snapshot();
-    state.frames.forEach(pixelizeFrame);
-  } else {
-    if (!state.pixelized) snapshot();
-    pixelizeFrame(state.frames[state.frameIdx]);
+  const btn = $("btn-pixelize");
+  btn.classList.add("processing");
+  try {
+    if (range === "all") {
+      snapshot();
+      const total = state.frames.length;
+      for (let i = 0; i < total; i++) {
+        setStatus(`도트화 처리 중... ${i + 1}/${total}`, "processing");
+        await new Promise((r) => setTimeout(r, 0));
+        pixelizeFrame(state.frames[i]);
+      }
+      setStatus(`도트화 완료 (${total} 프레임)`, "success");
+    } else {
+      if (!state.pixelized) snapshot();
+      setStatus("도트화 처리 중...", "processing");
+      await new Promise((r) => setTimeout(r, 0));
+      pixelizeFrame(state.frames[state.frameIdx]);
+      setStatus("도트화 완료", "success");
+    }
+    invalidateSourceCache();
+    refreshPalette();
+    renderTimeline();
+    redraw();
+  } catch (e) {
+    setStatus("도트화 실패: " + e.message, "error");
+  } finally {
+    btn.classList.remove("processing");
   }
-  invalidateSourceCache();
-  refreshPalette();
-  renderTimeline();
-  redraw();
 }
 
 $("btn-pixelize").addEventListener("click", applyPixelize);
@@ -830,11 +913,13 @@ $("btn-bg").addEventListener("click", async () => {
     return;
   }
   $("btn-bg").disabled = true;
+  $("btn-bg").classList.add("processing");
   const precise = $("bg-precise").checked;
   setStatus(
     precise
       ? "배경 제거 중 (정밀)... 첫 호출 시 ~170MB 추가 다운로드, 시간 걸림"
-      : "배경 제거 중..."
+      : "배경 제거 중...",
+    "processing"
   );
   snapshot();
   try {
@@ -865,13 +950,14 @@ $("btn-bg").addEventListener("click", async () => {
     state.pixelized = false;
     bumpSource();
     redraw();
-    setStatus("배경 제거 완료");
+    setStatus("배경 제거 완료", "success");
   } catch (e) {
-    history.pop();  // 실패 → 스냅샷 롤백
+    history.pop();
     updateUndoButton();
-    setStatus("배경 제거 실패: " + e.message);
+    setStatus("배경 제거 실패: " + e.message, "error");
   } finally {
     $("btn-bg").disabled = false;
+    $("btn-bg").classList.remove("processing");
   }
 });
 
@@ -1078,10 +1164,21 @@ canvas.addEventListener("mousedown", (e) => {
   }
   if (tool === "brush" || tool === "erase") {
     snapshot();
-    // 새 ImageData로 교체 — history의 옛 source가 변경되지 않도록 분리
-    const newImg = new ImageData(state.source.width, state.source.height);
-    newImg.data.set(state.source.data);
-    state.source = newImg;
+    // 트레이싱 모드: traceLayer를 새 ImageData로 교체. 일반 모드: source 교체
+    const f = state.frames[state.frameIdx];
+    if (f) {
+      if (state.tracing) {
+        const tl = f.traceLayer;
+        const w = f.source.width, h = f.source.height;
+        const newImg = new ImageData(w, h);
+        if (tl && tl.width === w && tl.height === h) newImg.data.set(tl.data);
+        f.traceLayer = newImg;
+      } else {
+        const newImg = new ImageData(f.source.width, f.source.height);
+        newImg.data.set(f.source.data);
+        f.source = newImg;
+      }
+    }
     pixelDragging = true;
     pixelTool = tool;
     pixelLast = null;
@@ -1702,15 +1799,72 @@ $("btn-flip-h").addEventListener("click", () => {
     return;
   }
   snapshot();
-  state.source = flipHorizontal(state.source);
-  state.original = flipHorizontal(state.original);
-  // 영역 선택은 좌우 좌표 어긋나므로 클리어
+  const f = state.frames[state.frameIdx];
+  if (f) {
+    f.source = flipHorizontal(f.source);
+    f.original = flipHorizontal(f.original);
+    if (f.traceLayer) f.traceLayer = flipHorizontal(f.traceLayer);
+  }
   state.selection = null;
   state.draftSelection = null;
+  invalidateSourceCache();
   refreshPalette();
+  renderTimeline();
   redraw();
   setStatus("좌우 반전 완료");
 });
+
+// ---------- 트레이싱 ----------
+$("tracing-mode").addEventListener("change", () => {
+  state.tracing = $("tracing-mode").checked;
+  redraw();
+});
+$("guide-opacity").addEventListener("input", () => {
+  state.guideOpacity = parseInt($("guide-opacity").value, 10) / 100;
+  $("guide-opacity-val").textContent = $("guide-opacity").value + "%";
+  redraw();
+});
+$("btn-clear-trace").addEventListener("click", () => {
+  const f = state.frames[state.frameIdx];
+  if (!f) {
+    setStatus("프레임이 없습니다");
+    return;
+  }
+  if (!f.traceLayer) {
+    setStatus("트레이스가 비어있습니다");
+    return;
+  }
+  snapshot();
+  f.traceLayer = null;
+  redraw();
+  setStatus("트레이스 지움");
+});
+
+function resizeImageDataNearest(img, newW, newH) {
+  if (!img) return null;
+  if (img.width === newW && img.height === newH) return img;
+  const tmp = imageDataToCanvas2(img);
+  const c = document.createElement("canvas");
+  c.width = newW;
+  c.height = newH;
+  const ctx = c.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(tmp, 0, 0, newW, newH);
+  return ctx.getImageData(0, 0, newW, newH);
+}
+
+function compositeFrame(frame) {
+  // source + traceLayer 합친 ImageData 반환
+  if (!frame.source) return null;
+  if (!frame.traceLayer) return frame.source;
+  const c = document.createElement("canvas");
+  c.width = frame.source.width;
+  c.height = frame.source.height;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(imageDataToCanvas2(frame.source), 0, 0);
+  ctx.drawImage(imageDataToCanvas2(frame.traceLayer), 0, 0);
+  return ctx.getImageData(0, 0, c.width, c.height);
+}
 
 // ---------- 픽셀 편집 (스포이드/브러시/지우개) ----------
 let pixelDragging = false;
@@ -1738,11 +1892,25 @@ function getBrushSize() {
   return r ? r.value : "cell";
 }
 
+function getEditTarget() {
+  // 트레이싱 모드면 traceLayer (없으면 생성), 아니면 source
+  const f = state.frames[state.frameIdx];
+  if (!f) return null;
+  if (state.tracing) {
+    if (!f.traceLayer || f.traceLayer.width !== f.source.width || f.traceLayer.height !== f.source.height) {
+      f.traceLayer = new ImageData(f.source.width, f.source.height);
+    }
+    return f.traceLayer;
+  }
+  return f.source;
+}
+
 function paintOne(ix, iy, tool) {
-  if (!state.source) return;
-  if (ix < 0 || iy < 0 || ix >= state.source.width || iy >= state.source.height) return;
-  const idx = (iy * state.source.width + ix) * 4;
-  const data = state.source.data;
+  const target = getEditTarget();
+  if (!target) return;
+  if (ix < 0 || iy < 0 || ix >= target.width || iy >= target.height) return;
+  const idx = (iy * target.width + ix) * 4;
+  const data = target.data;
   if (tool === "brush") {
     data[idx] = state.activeColor[0];
     data[idx + 1] = state.activeColor[1];
@@ -1756,12 +1924,34 @@ function paintOne(ix, iy, tool) {
 function paintPixel(ix, iy, tool) {
   const size = getBrushSize();
   if (size === "cell") {
-    const sub = getSub();
-    const bx = Math.floor(ix / sub) * sub;
-    const by = Math.floor(iy / sub) * sub;
-    for (let dy = 0; dy < sub; dy++) {
-      for (let dx = 0; dx < sub; dx++) {
-        paintOne(bx + dx, by + dy, tool);
+    const target = getEditTarget();
+    if (!target) return false;
+    if (state.pixelized) {
+      // 도트화 후: target 사이즈 = N*sub × M*sub. 큰 격자 1셀 = sub × sub 도트
+      const sub = getSub();
+      const bx = Math.floor(ix / sub) * sub;
+      const by = Math.floor(iy / sub) * sub;
+      for (let dy = 0; dy < sub; dy++) {
+        for (let dx = 0; dx < sub; dx++) {
+          paintOne(bx + dx, by + dy, tool);
+        }
+      }
+    } else {
+      // 도트화 전: target = 원본 크기. 큰 격자 1셀 = gridDims로 계산한 cellSize × cellSize 픽셀
+      const n = getGridSize();
+      const sub = getSub();
+      const dims = gridDims(target.width, target.height, n * sub);
+      const cs = dims.cellSize;
+      const cellX = Math.floor(ix / cs);
+      const cellY = Math.floor(iy / cs);
+      const x0 = Math.floor(cellX * cs);
+      const y0 = Math.floor(cellY * cs);
+      const x1 = Math.min(target.width, Math.floor((cellX + 1) * cs));
+      const y1 = Math.min(target.height, Math.floor((cellY + 1) * cs));
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          paintOne(x, y, tool);
+        }
       }
     }
   } else {
@@ -1875,14 +2065,182 @@ document.querySelectorAll(".help-icon").forEach((icon) => {
   icon.addEventListener("mouseleave", () => tooltip.classList.remove("show"));
 });
 
-// ---------- 사이드바 토글 ----------
+// ---------- 사이드바 / 우측 패널 토글 ----------
 const btnToggle = $("btn-toggle");
+const btnToggleRight = $("btn-toggle-right");
+const userToggled = { left: false, right: false };
+
 btnToggle.addEventListener("click", () => {
+  userToggled.left = true;
   const collapsed = document.body.classList.toggle("sidebar-collapsed");
   btnToggle.textContent = collapsed ? "▶" : "◀";
-  // transition 끝난 후 캔버스 다시 그리기
   setTimeout(redraw, 220);
 });
+btnToggleRight.addEventListener("click", () => {
+  userToggled.right = true;
+  const collapsed = document.body.classList.toggle("rightpanel-collapsed");
+  btnToggleRight.textContent = collapsed ? "◀" : "▶";
+  setTimeout(redraw, 220);
+});
+
+// ---------- 반응형 (페이지 로드 시 + 리사이즈 시 자동 접기, 사용자 토글 후엔 자동 안 함) ----------
+function applyResponsive() {
+  const w = window.innerWidth;
+  if (!userToggled.right) {
+    if (w < 1280) document.body.classList.add("rightpanel-collapsed");
+    else document.body.classList.remove("rightpanel-collapsed");
+    btnToggleRight.textContent = document.body.classList.contains("rightpanel-collapsed") ? "◀" : "▶";
+  }
+  if (!userToggled.left) {
+    if (w < 960) document.body.classList.add("sidebar-collapsed");
+    else document.body.classList.remove("sidebar-collapsed");
+    btnToggle.textContent = document.body.classList.contains("sidebar-collapsed") ? "▶" : "◀";
+  }
+}
+applyResponsive();
+let _respTimer = null;
+window.addEventListener("resize", () => {
+  if (_respTimer) clearTimeout(_respTimer);
+  _respTimer = setTimeout(applyResponsive, 100);
+});
+
+// ---------- 드래그 앤 드롭 ----------
+(function setupDragDrop() {
+  const stage = $("stage");
+  let dragCount = 0;
+  stage.addEventListener("dragenter", (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;
+    dragCount++;
+    stage.classList.add("dragover");
+    e.preventDefault();
+  });
+  stage.addEventListener("dragleave", (e) => {
+    dragCount--;
+    if (dragCount <= 0) {
+      dragCount = 0;
+      stage.classList.remove("dragover");
+    }
+  });
+  stage.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  });
+  stage.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    dragCount = 0;
+    stage.classList.remove("dragover");
+    if (!e.dataTransfer) return;
+    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+    if (files.length === 0) {
+      setStatus("이미지 파일이 아닙니다", "error");
+      return;
+    }
+    setStatus(`${files.length}개 이미지 추가 중...`, "processing");
+    for (const f of files) {
+      await loadImageFromFile(f);
+    }
+    setStatus(`${files.length}개 프레임 추가됨`, "success");
+  });
+})();
+
+// ---------- 단축키: 도구 전환 / F1 안내 / Ctrl+S 저장 / ESC 모달 닫기 ----------
+const TOOL_KEYS = {
+  "v": "none",   // 선택 해제 (V)
+  "m": "rect",   // 사각형 (M = Marquee)
+  "l": "lasso",  // 올가미 (L)
+  "i": "pick",   // 스포이드 (I)
+  "b": "brush",  // 브러시 (B)
+  "e": "erase",  // 지우개 (E)
+};
+const TOOL_LABEL = {
+  none: "선택 없음", rect: "사각형", lasso: "올가미",
+  pick: "스포이드", brush: "브러시", erase: "지우개",
+};
+
+window.addEventListener("keydown", (e) => {
+  // INPUT/TEXTAREA에 포커스 있으면 단축키 무시
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+
+  // ESC: 모달 닫기
+  if (e.key === "Escape") {
+    if ($("modal-overlay").classList.contains("show")) {
+      e.preventDefault();
+      hideModal();
+      return;
+    }
+    // 영역 선택 해제
+    if (state.selection || state.draftSelection) {
+      state.selection = null;
+      state.draftSelection = null;
+      redraw();
+    }
+    return;
+  }
+
+  // F1 또는 Shift+? : 단축키 안내
+  if (e.key === "F1" || (e.key === "?" && e.shiftKey)) {
+    e.preventDefault();
+    showShortcutsModal();
+    return;
+  }
+
+  // Ctrl+S: 저장 메뉴
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    $("btn-save-menu").click();
+    return;
+  }
+
+  // 도구 전환 (modifier 없을 때만)
+  if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+    const key = e.key.toLowerCase();
+    if (TOOL_KEYS[key]) {
+      e.preventDefault();
+      const radio = document.querySelector(`input[name="tool"][value="${TOOL_KEYS[key]}"]`);
+      if (radio && !radio.disabled) {
+        radio.checked = true;
+        radio.dispatchEvent(new Event("change"));
+        setStatus(`도구: ${TOOL_LABEL[TOOL_KEYS[key]]}`);
+      }
+    }
+  }
+});
+
+$("btn-shortcuts")?.addEventListener("click", () => showShortcutsModal());
+
+function showShortcutsModal() {
+  showModal("단축키 안내", `
+    <div style="display:grid; grid-template-columns: auto 1fr; gap:8px 18px; font-size:13px;">
+      <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:4px;">파일/저장</div>
+      <kbd>Ctrl+S</kbd><span>저장 메뉴 열기</span>
+      <kbd>Ctrl+Z</kbd><span>되돌리기 (배경 제거 / 도트화 / 픽셀 편집)</span>
+
+      <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:8px;">도구 전환</div>
+      <kbd>V</kbd><span>선택 없음</span>
+      <kbd>M</kbd><span>사각형 영역 (Marquee)</span>
+      <kbd>L</kbd><span>올가미 영역</span>
+      <kbd>I</kbd><span>스포이드</span>
+      <kbd>B</kbd><span>브러시</span>
+      <kbd>E</kbd><span>지우개</span>
+
+      <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:8px;">화면 조작</div>
+      <kbd>마우스 휠</kbd><span>줌 (커서 위치 기준)</span>
+      <kbd>+ / -</kbd><span>줌 인/아웃</span>
+      <kbd>0</kbd><span>화면 맞춤 (FIT)</span>
+      <kbd>1</kbd><span>100%</span>
+      <kbd>Space + 드래그</kbd><span>임시 팬</span>
+      <kbd>Ctrl+Shift + 드래그</kbd><span>임시 팬</span>
+      <kbd>마우스 미들 드래그</kbd><span>팬</span>
+
+      <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:8px;">기타</div>
+      <kbd>ESC</kbd><span>모달 닫기 / 영역 선택 해제</span>
+      <kbd>F1</kbd><span>이 단축키 안내</span>
+      <kbd>이미지 드래그앤드롭</kbd><span>캔버스에 끌어 놓아 프레임 추가</span>
+    </div>
+  `);
+}
 
 // ---------- 모달 시스템 ----------
 let currentModalCleanup = null;
@@ -1913,7 +2271,15 @@ function imageDataToCanvas2(img) {
 }
 
 // ---------- 타임라인 ----------
+function updateEmptyState() {
+  const el = $("empty-state");
+  if (!el) return;
+  if (state.frames.length === 0) el.classList.remove("hidden");
+  else el.classList.add("hidden");
+}
+
 function renderTimeline() {
+  updateEmptyState();
   const container = $("timeline-frames");
   container.innerHTML = "";
   state.frames.forEach((frame, i) => {
@@ -2016,6 +2382,14 @@ $("btn-save-menu").addEventListener("click", () => {
       <label style="display:flex; gap:8px; align-items:center; cursor:pointer;"><input type="radio" name="save-mode" value="gif"> GIF 애니메이션</label>
     </div>
     <div style="border-top:1px solid #444; padding-top:10px;">
+      <div class="modal-row">
+        <span style="font-size:12px; color:#aaa;">출력 모드</span>
+        <div class="radio-group">
+          <input type="radio" name="output-mode" id="om-comp" value="combined" checked><label for="om-comp">합친 결과</label>
+          <input type="radio" name="output-mode" id="om-src" value="source"><label for="om-src">원본만</label>
+          <input type="radio" name="output-mode" id="om-trc" value="trace"><label for="om-trc">트레이스만</label>
+        </div>
+      </div>
       <div class="modal-row"><label>시트 컬럼 <input type="number" id="sm-cols" value="8" min="1" max="64"></label><label>패딩 <input type="number" id="sm-padding" value="0" min="0" max="32"></label></div>
       <div class="modal-row"><label>GIF FPS <input type="number" id="sm-fps" value="12" min="1" max="60"></label><label>GIF 스케일 <input type="number" id="sm-scale" value="4" min="1" max="16"></label></div>
     </div>
@@ -2025,19 +2399,30 @@ $("btn-save-menu").addEventListener("click", () => {
   `);
   $("sm-execute").addEventListener("click", async () => {
     const mode = document.querySelector('input[name="save-mode"]:checked').value;
+    const outputMode = document.querySelector('input[name="output-mode"]:checked').value;
     const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+
+    function frameImage(f) {
+      if (outputMode === "source") return f.source;
+      if (outputMode === "trace") return f.traceLayer || new ImageData(f.source.width, f.source.height);
+      return compositeFrame(f) || f.source;
+    }
+
     if (mode === "png") {
-      const c = freshCanvas(state.source);
+      const f = state.frames[state.frameIdx];
+      const img = frameImage(f);
+      const c = freshCanvas(img);
       const blob = await new Promise((res) => c.toBlob(res, "image/png"));
       const base = stripExt(state.fileName) || "frame";
-      const tag = state.pixelized ? `_${state.source.width}x${state.source.height}` : "";
+      const tag = state.pixelized ? `_${img.width}x${img.height}` : "";
       downloadBlob(blob, `${base}${tag}.png`);
       hideModal();
     } else if (mode === "zip") {
       const zip = new JSZip();
       for (let i = 0; i < state.frames.length; i++) {
         const f = state.frames[i];
-        const c = freshCanvas(f.source);
+        const img = frameImage(f);
+        const c = freshCanvas(img);
         const blob = await new Promise((res) => c.toBlob(res, "image/png"));
         const base = stripExt(f.fileName) || `frame_${i + 1}`;
         zip.file(`${String(i + 1).padStart(3, "0")}_${base}.png`, blob);
@@ -2048,21 +2433,22 @@ $("btn-save-menu").addEventListener("click", () => {
     } else if (mode === "sheet") {
       const cols = Math.max(1, parseInt($("sm-cols").value, 10) || 8);
       const padding = Math.max(0, parseInt($("sm-padding").value, 10) || 0);
-      const maxW = Math.max(...state.frames.map(f => f.source.width));
-      const maxH = Math.max(...state.frames.map(f => f.source.height));
-      const rows = Math.ceil(state.frames.length / cols);
+      const imgs = state.frames.map(frameImage);
+      const maxW = Math.max(...imgs.map(i => i.width));
+      const maxH = Math.max(...imgs.map(i => i.height));
+      const rows = Math.ceil(imgs.length / cols);
       const sheetW = cols * maxW + (cols + 1) * padding;
       const sheetH = rows * maxH + (rows + 1) * padding;
       const c = document.createElement("canvas");
       c.width = sheetW; c.height = sheetH;
       const ctx = c.getContext("2d");
       ctx.imageSmoothingEnabled = false;
-      state.frames.forEach((f, i) => {
+      imgs.forEach((img, i) => {
         const r = Math.floor(i / cols);
         const cc = i % cols;
         const x = padding + cc * (maxW + padding);
         const y = padding + r * (maxH + padding);
-        ctx.drawImage(imageDataToCanvas2(f.source), x, y);
+        ctx.drawImage(imageDataToCanvas2(img), x, y);
       });
       c.toBlob((blob) => {
         downloadBlob(blob, `sheet_${cols}x${rows}_${maxW}x${maxH}_${ts}.png`);
@@ -2075,18 +2461,19 @@ $("btn-save-menu").addEventListener("click", () => {
       }
       const fps = Math.max(1, parseInt($("sm-fps").value, 10) || 12);
       const scale = Math.max(1, parseInt($("sm-scale").value, 10) || 4);
-      const W = state.frames[0].source.width * scale;
-      const H = state.frames[0].source.height * scale;
+      const imgs = state.frames.map(frameImage);
+      const W = imgs[0].width * scale;
+      const H = imgs[0].height * scale;
       const gif = new GIF({
         workers: 2, quality: 10, width: W, height: H,
         workerScript: "https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js",
       });
-      state.frames.forEach((f) => {
+      imgs.forEach((img) => {
         const cc = document.createElement("canvas");
         cc.width = W; cc.height = H;
         const cctx = cc.getContext("2d");
         cctx.imageSmoothingEnabled = false;
-        cctx.drawImage(imageDataToCanvas2(f.source), 0, 0, W, H);
+        cctx.drawImage(imageDataToCanvas2(img), 0, 0, W, H);
         gif.addFrame(cc, { delay: 1000 / fps, copy: true });
       });
       const btn = $("sm-execute");
