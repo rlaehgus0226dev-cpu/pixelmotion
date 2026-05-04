@@ -15,6 +15,10 @@ const state = {
   guideOpacity: 0.5,       // 가이드(원본) 투명도 0~1
 };
 
+// 함수에서 참조하는 모듈 변수들 — 위로 끌어올려서 TDZ 회피
+let _clipboard = null;
+let _refFrameIdx = -1;
+
 // state.source / original / pixelized / fileName 은 현재 프레임의 alias
 Object.defineProperty(state, "source", {
   get() { const f = state.frames[state.frameIdx]; return f ? f.source : null; },
@@ -2193,6 +2197,14 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
+  // Ctrl+C / Ctrl+V / Ctrl+X
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
+    const k = e.key.toLowerCase();
+    if (k === "c") { e.preventDefault(); copySelection(false); return; }
+    if (k === "v") { e.preventDefault(); pasteClipboard(); return; }
+    if (k === "x") { e.preventDefault(); copySelection(true); return; }
+  }
+
   // 도구 전환 (modifier 없을 때만)
   if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
     const key = e.key.toLowerCase();
@@ -2209,6 +2221,229 @@ window.addEventListener("keydown", (e) => {
 });
 
 $("btn-shortcuts")?.addEventListener("click", () => showShortcutsModal());
+
+// ---------- 복사 / 붙여넣기 / 잘라내기 ----------
+
+function copySelection(cut = false) {
+  if (!state.selection || !state.source) {
+    setStatus("선택 영역이 없습니다", "error");
+    return;
+  }
+  const W = state.source.width, H = state.source.height;
+  const target = state.tracing ? state.frames[state.frameIdx]?.traceLayer : state.source;
+  const src = target || state.source;
+  const mask = buildSelectionMask(state.selection, W, H, "touch");
+  // bounding box
+  let xMin = Infinity, yMin = Infinity, xMax = -1, yMax = -1;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (mask[y * W + x]) {
+        if (x < xMin) xMin = x;
+        if (x > xMax) xMax = x;
+        if (y < yMin) yMin = y;
+        if (y > yMax) yMax = y;
+      }
+    }
+  }
+  if (xMax < 0) {
+    setStatus("선택 영역이 비어있습니다", "error");
+    return;
+  }
+  const w = xMax - xMin + 1;
+  const h = yMax - yMin + 1;
+  const out = new ImageData(w, h);
+  const sd = src.data;
+  const od = out.data;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const sx = xMin + x;
+      const sy = yMin + y;
+      if (!mask[sy * W + sx]) continue;
+      const si = (sy * W + sx) * 4;
+      const di = (y * w + x) * 4;
+      od[di] = sd[si];
+      od[di + 1] = sd[si + 1];
+      od[di + 2] = sd[si + 2];
+      od[di + 3] = sd[si + 3];
+    }
+  }
+  _clipboard = { imageData: out, x: xMin, y: yMin };
+
+  if (cut) {
+    snapshot();
+    const f = state.frames[state.frameIdx];
+    if (state.tracing && f && f.traceLayer) {
+      const newImg = new ImageData(f.traceLayer.width, f.traceLayer.height);
+      newImg.data.set(f.traceLayer.data);
+      for (let i = 0; i < W * H; i++) {
+        if (mask[i]) newImg.data[i * 4 + 3] = 0;
+      }
+      f.traceLayer = newImg;
+    } else if (f) {
+      const newImg = new ImageData(f.source.width, f.source.height);
+      newImg.data.set(f.source.data);
+      for (let i = 0; i < W * H; i++) {
+        if (mask[i]) newImg.data[i * 4 + 3] = 0;
+      }
+      f.source = newImg;
+    }
+    invalidateSourceCache();
+    refreshPalette();
+    renderTimeline();
+    redraw();
+    setStatus(`잘라내기 ${w}×${h}`, "success");
+  } else {
+    setStatus(`복사 ${w}×${h}`, "success");
+  }
+}
+
+function pasteClipboard() {
+  if (!_clipboard) {
+    setStatus("클립보드가 비어있습니다", "error");
+    return;
+  }
+  const f = state.frames[state.frameIdx];
+  if (!f) {
+    setStatus("프레임이 없습니다", "error");
+    return;
+  }
+  snapshot();
+  const clip = _clipboard.imageData;
+  const cx = _clipboard.x;
+  const cy = _clipboard.y;
+  const editTraceLayer = state.tracing;
+  let target;
+  if (editTraceLayer) {
+    if (!f.traceLayer || f.traceLayer.width !== f.source.width || f.traceLayer.height !== f.source.height) {
+      f.traceLayer = new ImageData(f.source.width, f.source.height);
+    }
+    const newImg = new ImageData(f.traceLayer.width, f.traceLayer.height);
+    newImg.data.set(f.traceLayer.data);
+    f.traceLayer = newImg;
+    target = newImg;
+  } else {
+    const newImg = new ImageData(f.source.width, f.source.height);
+    newImg.data.set(f.source.data);
+    f.source = newImg;
+    target = newImg;
+  }
+  let pasted = 0;
+  for (let y = 0; y < clip.height; y++) {
+    for (let x = 0; x < clip.width; x++) {
+      const sx = cx + x;
+      const sy = cy + y;
+      if (sx < 0 || sx >= target.width || sy < 0 || sy >= target.height) continue;
+      const ci = (y * clip.width + x) * 4;
+      if (clip.data[ci + 3] === 0) continue;
+      const ti = (sy * target.width + sx) * 4;
+      target.data[ti] = clip.data[ci];
+      target.data[ti + 1] = clip.data[ci + 1];
+      target.data[ti + 2] = clip.data[ci + 2];
+      target.data[ti + 3] = clip.data[ci + 3];
+      pasted++;
+    }
+  }
+  invalidateSourceCache();
+  refreshPalette();
+  renderTimeline();
+  renderRefCanvas();
+  redraw();
+  setStatus(`붙여넣기 ${pasted}px`, "success");
+}
+
+// ---------- 참조 캔버스 ----------
+const refCanvas = $("ref-canvas");
+const refCtx = refCanvas.getContext("2d");
+
+function renderRefFrameOptions() {
+  const select = $("ref-frame-select");
+  select.innerHTML = "";
+  state.frames.forEach((f, i) => {
+    const opt = document.createElement("option");
+    opt.value = i;
+    opt.textContent = `프레임 ${i + 1}${i === state.frameIdx ? " (현재)" : ""}`;
+    select.appendChild(opt);
+  });
+  if (_refFrameIdx >= 0 && _refFrameIdx < state.frames.length) {
+    select.value = _refFrameIdx;
+  }
+}
+
+function fitCanvas2(canvas, ctx) {
+  const dpr = window.devicePixelRatio || 1;
+  const parent = canvas.parentElement;
+  const w = parent.clientWidth;
+  const h = parent.clientHeight;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+  }
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function renderRefCanvas() {
+  if (!document.body.classList.contains("ref-on")) return;
+  fitCanvas2(refCanvas, refCtx);
+  const cw = refCanvas.clientWidth;
+  const ch = refCanvas.clientHeight;
+  refCtx.fillStyle = "#1a1a1a";
+  refCtx.fillRect(0, 0, cw, ch);
+
+  const empty = $("ref-empty");
+  if (_refFrameIdx < 0 || _refFrameIdx >= state.frames.length) {
+    empty.classList.remove("hidden");
+    return;
+  }
+  empty.classList.add("hidden");
+  const f = state.frames[_refFrameIdx];
+  if (!f || !f.source) return;
+
+  const iw = f.source.width;
+  const ih = f.source.height;
+  const scale = Math.min(cw / iw, ch / ih) * 0.9;
+  const dw = Math.max(1, Math.floor(iw * scale));
+  const dh = Math.max(1, Math.floor(ih * scale));
+  const x = Math.floor((cw - dw) / 2);
+  const y = Math.floor((ch - dh) / 2);
+  refCtx.imageSmoothingEnabled = false;
+  // 체커
+  for (let py = 0; py < dh; py += 10) {
+    for (let px = 0; px < dw; px += 10) {
+      const dark = ((Math.floor(px / 10) + Math.floor(py / 10)) % 2) === 1;
+      refCtx.fillStyle = dark ? "#aaaaaa" : "#dcdcdc";
+      refCtx.fillRect(x + px, y + py, Math.min(10, dw - px), Math.min(10, dh - py));
+    }
+  }
+  refCtx.drawImage(imageDataToCanvas2(f.source), x, y, dw, dh);
+  if (f.traceLayer) refCtx.drawImage(imageDataToCanvas2(f.traceLayer), x, y, dw, dh);
+}
+
+$("btn-ref-toggle").addEventListener("click", () => {
+  document.body.classList.toggle("ref-on");
+  const on = document.body.classList.contains("ref-on");
+  if (on) {
+    if (_refFrameIdx < 0 && state.frames.length > 0) {
+      _refFrameIdx = state.frameIdx === 0 && state.frames.length > 1 ? 1 : 0;
+    }
+    renderRefFrameOptions();
+    setTimeout(() => { redraw(); renderRefCanvas(); }, 220);
+  } else {
+    setTimeout(redraw, 220);
+  }
+});
+$("btn-ref-close").addEventListener("click", () => {
+  document.body.classList.remove("ref-on");
+  setTimeout(redraw, 220);
+});
+$("ref-frame-select").addEventListener("change", (e) => {
+  _refFrameIdx = parseInt(e.target.value, 10);
+  renderRefCanvas();
+});
+window.addEventListener("resize", () => {
+  if (document.body.classList.contains("ref-on")) renderRefCanvas();
+});
 
 function showShortcutsModal() {
   showModal("단축키 안내", `
@@ -2280,6 +2515,8 @@ function updateEmptyState() {
 
 function renderTimeline() {
   updateEmptyState();
+  if (typeof renderRefFrameOptions === "function") renderRefFrameOptions();
+  if (typeof renderRefCanvas === "function" && document.body.classList.contains("ref-on")) renderRefCanvas();
   const container = $("timeline-frames");
   container.innerHTML = "";
   state.frames.forEach((frame, i) => {

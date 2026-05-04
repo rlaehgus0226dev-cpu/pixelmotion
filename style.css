@@ -75,7 +75,55 @@ button.primary:hover:not(:disabled) { background: #5dc499; }
 input[type=file] { display: none; }
 
 #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-#stage { flex: 1; position: relative; overflow: hidden; min-height: 0; background: #1a1a1a; }
+#stage { flex: 1; min-height: 0; background: #1a1a1a; display: flex; flex-direction: row; }
+
+#canvas-main { flex: 1; position: relative; overflow: hidden; min-width: 0; }
+#canvas-ref { width: 0; flex-shrink: 0; position: relative; overflow: hidden; transition: width 0.2s ease; border-left: 1px solid #333; background: #1a1a1a; }
+body.ref-on #canvas-ref { width: 50%; }
+#ref-canvas { display: block; width: 100%; height: 100%; }
+#ref-header {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(20,20,20,0.9);
+  border: 1px solid #555;
+  border-radius: 6px;
+  padding: 5px 8px;
+  z-index: 50;
+  font-size: 12px;
+}
+#ref-header select {
+  flex: 1;
+  background: #2a2a2a;
+  color: #ddd;
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#ref-header button {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+#ref-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #555;
+  font-size: 13px;
+  pointer-events: none;
+  text-align: center;
+  padding: 20px;
+}
+body.ref-on #canvas-ref:has(#ref-empty:not(.hidden)) { /* 빈 상태 */ }
+#ref-empty.hidden { display: none; }
 #stage.dragover::after {
   content: "여기에 놓아 프레임 추가";
   position: absolute;
