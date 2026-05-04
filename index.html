@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>PixelMotion</title>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="topbar">
+  <div class="topbar-group">
+    <label class="button" for="file-input">이미지 열기</label>
+    <input id="file-input" type="file" accept="image/*">
+    <button id="btn-save">PNG 저장</button>
+    <button id="btn-batch">일괄 처리</button>
+    <span class="help-icon" data-help="이미지 열기 — PNG/JPG/BMP/GIF/WEBP 로드
+
+PNG 저장 — 도트화 결과를 도트 단위 그대로 저장 (예: 64×48 사이즈). Aseprite import용
+
+일괄 처리 — 여러 이미지를 한 번에 같은 설정으로 도트화. ZIP으로 다운로드. 8방향 일관성 처리의 핵심">?</span>
+  </div>
+
+  <div class="topbar-divider"></div>
+
+  <div class="topbar-group">
+    <button id="btn-bg">배경 제거</button>
+    <label class="checkbox"><input type="checkbox" id="bg-precise">정밀</label>
+    <button id="btn-undo" disabled>↶ 되돌리기</button>
+    <span class="help-icon" data-help="배경 제거 — AI(rembg)로 자동 배경 제거. 첫 호출 시 모델 ~170MB 다운로드
+
+정밀 — isnet 모델 + alpha matting. 가장자리 더 깔끔, 더 느림. 첫 호출 시 ~170MB 추가 다운로드
+
+되돌리기 (Ctrl+Z) — 직전 변환(배경 제거 / 도트화 첫 진입) 취소
+
+자동 배경 제거는 본질적 한계가 큼. 결과 부족하면 Photopea 같은 외부 툴에서 누끼 후 PNG로 import 권장">?</span>
+  </div>
+
+  <div id="file-info"></div>
+</div>
+
+<div class="body-wrap">
+
+  <button id="btn-toggle" title="사이드바 접기/펼치기">◀</button>
+
+  <div id="sidebar">
+
+    <div class="group">
+      <div class="group-header">
+        <span class="group-title">격자</span>
+        <span class="help-icon" data-help="사이즈 — 짧은 변의 도트 수. 64면 짧은 변이 64도트, 긴 변은 비율대로 자동
+
+세분화 — 큰 격자 1셀을 N×N 도트로 잘게 분할. 작은 디테일(머리카락 등)이 살아남음. 예) 64 + 4×4 = 짧은 변 256도트
+
+격자 표시 — 격자 라인 ON/OFF
+
+세분화 라인 — 세분화 모드의 도트 단위 라인만 토글. 도트 결과는 그대로 유지">?</span>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">사이즈</span>
+        <div class="radio-group">
+          <input type="radio" name="grid" id="g48" value="48"><label for="g48">48</label>
+          <input type="radio" name="grid" id="g64" value="64" checked><label for="g64">64</label>
+          <input type="radio" name="grid" id="g128" value="128"><label for="g128">128</label>
+          <input type="radio" name="grid" id="g256" value="256"><label for="g256">256</label>
+        </div>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">세분화</span>
+        <div class="radio-group">
+          <input type="radio" name="sub" id="sub1" value="1" checked><label for="sub1">1×1</label>
+          <input type="radio" name="sub" id="sub2" value="2"><label for="sub2">2×2</label>
+          <input type="radio" name="sub" id="sub3" value="3"><label for="sub3">3×3</label>
+          <input type="radio" name="sub" id="sub4" value="4"><label for="sub4">4×4</label>
+        </div>
+      </div>
+      <div class="row">
+        <label class="checkbox"><input type="checkbox" id="show-grid" checked>격자 표시</label>
+        <label class="checkbox"><input type="checkbox" id="show-subgrid" checked>세분화 라인</label>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-header">
+        <span class="group-title">도트화</span>
+        <span class="help-icon" data-help="모드 — 다운샘플 알고리즘
+  • 평균: 셀 픽셀 평균. 디테일 살지만 흐릿
+  • 우세: 다수 색군. 또렷하나 작은 디테일 묻힘
+  • 디테일: 채도 가중 우세. 채도 있는 작은 디테일 보존
+
+색 — 팔레트 색 수 제한 (Median Cut). 적을수록 강한 도트 룩
+
+채도 — 다운샘플 후 채도 부스트 (luminance preserving)
+
+아웃라인 — 캐릭터 외곽 처리
+  • 도트: 외곽 1픽셀(sub-pixel)을 검정으로 변경
+  • 격자: 외곽 큰 격자 셀(N 단위)을 sub×sub 블록 단일 색으로 평탄화. 외곽은 큰 도트, 내부는 세분 도트 그대로 — 외곽이 깔끔하게 큰 격자 단위, 내부 디테일은 보존
+
+도트화 실행 — 위 설정으로 처리. 도트화 후 옵션 변경 시 자동 재적용">?</span>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">모드</span>
+        <div class="radio-group">
+          <input type="radio" name="ds" id="ds-avg" value="avg"><label for="ds-avg">평균</label>
+          <input type="radio" name="ds" id="ds-dom" value="dom" checked><label for="ds-dom">우세</label>
+          <input type="radio" name="ds" id="ds-det" value="det"><label for="ds-det">디테일</label>
+        </div>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">색</span>
+        <div class="radio-group">
+          <input type="radio" name="color" id="c0" value="0" checked><label for="c0">원본</label>
+          <input type="radio" name="color" id="c8" value="8"><label for="c8">8</label>
+          <input type="radio" name="color" id="c16" value="16"><label for="c16">16</label>
+          <input type="radio" name="color" id="c32" value="32"><label for="c32">32</label>
+          <input type="radio" name="color" id="c64" value="64"><label for="c64">64</label>
+        </div>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">채도</span>
+        <div class="radio-group">
+          <input type="radio" name="sat" id="s100" value="100" checked><label for="s100">기본</label>
+          <input type="radio" name="sat" id="s130" value="130"><label for="s130">+30%</label>
+          <input type="radio" name="sat" id="s160" value="160"><label for="s160">+60%</label>
+          <input type="radio" name="sat" id="s200" value="200"><label for="s200">+100%</label>
+        </div>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">아웃라인</span>
+        <div class="radio-group">
+          <input type="radio" name="outline" id="ol-off" value="off" checked><label for="ol-off">끔</label>
+          <input type="radio" name="outline" id="ol-fine" value="fine"><label for="ol-fine">도트</label>
+          <input type="radio" name="outline" id="ol-coarse" value="coarse"><label for="ol-coarse">격자</label>
+        </div>
+      </div>
+      <div class="row">
+        <button id="btn-pixelize" class="primary" style="width:100%;">도트화 실행</button>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="main">
+    <div id="stage">
+      <canvas id="canvas"></canvas>
+      <div id="badge" class="hidden"></div>
+      <div id="zoom-ctrl">
+        <button id="btn-zoom-out" title="축소 (-)">−</button>
+        <span id="zoom-display">FIT</span>
+        <button id="btn-zoom-in" title="확대 (+)">+</button>
+        <button id="btn-zoom-fit" title="화면에 맞춤 (0)">FIT</button>
+        <button id="btn-zoom-100" title="100% (1)">1:1</button>
+      </div>
+    </div>
+    <div id="status">이미지를 열어주세요</div>
+  </div>
+
+  <div id="rightpanel">
+    <div class="group">
+      <div class="group-header">
+        <span class="group-title">디자인 수정</span>
+        <span class="help-icon" data-help="도트화 결과를 직접 보정하는 도구입니다.
+
+선택 도구
+  • 없음: 마우스로 영역 선택 안 함
+  • 사각형: 캔버스에서 드래그해 직사각형 영역 선택
+  • 올가미: 자유 드래그로 영역 선택. 떼면 자동 닫힘
+  • 스포이드/브러시/지우개: 픽셀 편집 도구
+
+빈 격자 색 보정 — 영역 안 비어있는(투명) 도트를 색으로 채움
+  • 평균: 영역 안 평균색 한 가지로 모두 채움
+  • 그라데이션: BFS로 시드 색 → 영역 평균까지 점진 수렴 (단계별 색 변화)
+
+영역 안 도트는 영역과 1픽셀이라도 겹치면 자동 포함 (걸침 동작)">?</span>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">도구</span>
+        <div class="radio-group">
+          <input type="radio" name="tool" id="tool-none" value="none" checked><label for="tool-none">없음</label>
+          <input type="radio" name="tool" id="tool-rect" value="rect"><label for="tool-rect">사각형</label>
+          <input type="radio" name="tool" id="tool-lasso" value="lasso"><label for="tool-lasso">올가미</label>
+        </div>
+        <div class="radio-group" style="margin-top:4px;">
+          <input type="radio" name="tool" id="tool-pick" value="pick"><label for="tool-pick">스포이드</label>
+          <input type="radio" name="tool" id="tool-brush" value="brush"><label for="tool-brush">브러시</label>
+          <input type="radio" name="tool" id="tool-erase" value="erase"><label for="tool-erase">지우개</label>
+        </div>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">브러시 크기</span>
+        <div class="radio-group">
+          <input type="radio" name="brush-size" id="bs-cell" value="cell" checked><label for="bs-cell">큰 격자</label>
+          <input type="radio" name="brush-size" id="bs-1" value="1"><label for="bs-1">1×1</label>
+        </div>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">보정 방식</span>
+        <div class="radio-group">
+          <input type="radio" name="fill-mode" id="fm-avg" value="avg" checked><label for="fm-avg">평균</label>
+          <input type="radio" name="fill-mode" id="fm-grad" value="grad"><label for="fm-grad">그라데이션</label>
+        </div>
+      </div>
+      <div class="row">
+        <button id="btn-clear-sel">선택 해제</button>
+      </div>
+      <div class="row">
+        <button id="btn-fill-area" class="primary" style="width:100%;">빈 격자 색 보정</button>
+      </div>
+      <div class="row" style="border-top:1px solid #3a3a3a; padding-top:8px; margin-top:4px;">
+        <button id="btn-flip-h" style="width:100%;" title="8방향 작업 시 한 방향 결과를 반전해서 반대 방향 생성">↔ 좌우 반전</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-header">
+        <span class="group-title">색 / 팔레트</span>
+        <span class="help-icon" data-help="활성 색 — 브러시/페인트가 사용할 색
+  • 박스 클릭 → 자유 색 픽커 (OS 컬러 다이얼로그)
+  • 팔레트 셀 클릭 → 그 색으로 설정
+  • 스포이드 도구로 도트에서 추출
+
+팔레트 — 사용 가능한 색 그리드 (최대 64색)
+  • 도트화 후: 결과의 사용 색을 빈도순 표시
+  • 도트화 전: PICO-8 16색 기본 팔레트
+  • [팔레트 다시 추출] 버튼으로 갱신
+
+도구
+  • 스포이드: 도트 클릭 → 활성 색 추출
+  • 브러시: 클릭/드래그 → 활성 색으로 칠하기 (큰 격자 한 칸 또는 1×1)
+  • 지우개: 클릭/드래그 → 도트 투명화">?</span>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">활성 색 (클릭 → 픽커)</span>
+        <div id="active-color-box" data-rgb="—" title="클릭해서 색 픽커 열기"></div>
+        <div id="color-picker">
+          <div id="picker-area"><div id="picker-marker" style="left:0%; top:100%;"></div></div>
+          <div id="picker-hue"><div id="hue-marker" style="left:0%;"></div></div>
+          <div id="picker-hex-row">
+            <label>HEX</label>
+            <input type="text" id="picker-hex" placeholder="#000000" maxlength="7" spellcheck="false">
+          </div>
+        </div>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">팔레트 <span id="palette-count" style="color:#666;">0</span></span>
+        <div id="palette-grid"></div>
+      </div>
+      <div class="row">
+        <button id="btn-extract-palette" style="width:100%;">팔레트 다시 추출</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div id="tooltip"></div>
+
+<script src="script.js"></script>
+</body>
+</html>
