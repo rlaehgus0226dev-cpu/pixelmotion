@@ -4,21 +4,23 @@
 <meta charset="UTF-8">
 <title>PixelMotion</title>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js"></script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div id="topbar">
   <div class="topbar-group">
-    <label class="button" for="file-input">이미지 열기</label>
-    <input id="file-input" type="file" accept="image/*">
-    <button id="btn-save">PNG 저장</button>
-    <button id="btn-batch">일괄 처리</button>
-    <span class="help-icon" data-help="이미지 열기 — PNG/JPG/BMP/GIF/WEBP 로드
+    <label class="button" for="file-input">+ 이미지 추가</label>
+    <input id="file-input" type="file" accept="image/*" multiple>
+    <button id="btn-save-menu">저장 ▾</button>
+    <span class="help-icon" data-help="이미지 추가 — PNG/JPG/BMP/GIF/WEBP 여러 장 선택 가능. 선택한 모든 파일이 프레임으로 추가됨
 
-PNG 저장 — 도트화 결과를 도트 단위 그대로 저장 (예: 64×48 사이즈). Aseprite import용
-
-일괄 처리 — 여러 이미지를 한 번에 같은 설정으로 도트화. ZIP으로 다운로드. 8방향 일관성 처리의 핵심">?</span>
+저장 — 다음 4가지 출력 중 선택
+  • 현재 프레임 PNG
+  • 모든 프레임 ZIP
+  • 스프라이트 시트 (그리드)
+  • GIF 애니메이션">?</span>
   </div>
 
   <div class="topbar-divider"></div>
@@ -133,6 +135,13 @@ PNG 저장 — 도트화 결과를 도트 단위 그대로 저장 (예: 64×48 �
           <input type="radio" name="outline" id="ol-coarse" value="coarse"><label for="ol-coarse">격자</label>
         </div>
       </div>
+      <div class="row-stack">
+        <span class="row-stack-label">적용 범위</span>
+        <div class="radio-group">
+          <input type="radio" name="apply-range" id="ar-cur" value="current" checked><label for="ar-cur">현재만</label>
+          <input type="radio" name="apply-range" id="ar-all" value="all"><label for="ar-all">모든 프레임</label>
+        </div>
+      </div>
       <div class="row">
         <button id="btn-pixelize" class="primary" style="width:100%;">도트화 실행</button>
       </div>
@@ -151,6 +160,20 @@ PNG 저장 — 도트화 결과를 도트 단위 그대로 저장 (예: 64×48 �
         <button id="btn-zoom-fit" title="화면에 맞춤 (0)">FIT</button>
         <button id="btn-zoom-100" title="100% (1)">1:1</button>
       </div>
+    </div>
+    <div id="timeline">
+      <div id="timeline-controls">
+        <label class="button" for="file-input" style="padding:4px 10px;">+ 프레임</label>
+        <button id="tl-remove" title="현재 프레임 삭제">×</button>
+        <button id="tl-prev" title="이전 프레임">◀</button>
+        <button id="tl-next" title="다음 프레임">▶▶</button>
+        <button id="tl-play" title="재생">▶</button>
+        <button id="tl-stop" title="정지" disabled>⏸</button>
+        <label>FPS <input type="number" id="tl-fps" value="12" min="1" max="60"></label>
+        <label class="checkbox"><input type="checkbox" id="tl-onion">어니언 스킨</label>
+        <span id="tl-info" class="modal-info" style="margin-left:auto;">프레임 0개</span>
+      </div>
+      <div id="timeline-frames"></div>
     </div>
     <div id="status">이미지를 열어주세요</div>
   </div>
@@ -254,6 +277,16 @@ PNG 저장 — 도트화 결과를 도트 단위 그대로 저장 (예: 64×48 �
 </div>
 
 <div id="tooltip"></div>
+
+<div id="modal-overlay">
+  <div id="modal-content">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-title">제목</span>
+      <button class="modal-close" id="modal-close">×</button>
+    </div>
+    <div id="modal-body"></div>
+  </div>
+</div>
 
 <script src="script.js"></script>
 </body>
