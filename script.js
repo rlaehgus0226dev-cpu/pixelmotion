@@ -31,6 +31,8 @@ Object.defineProperty(state, "layout", {
 
 // 함수에서 참조하는 모듈 변수들 — 위로 끌어올려서 TDZ 회피
 let _clipboard = null;
+// floatingPaste = { imageData, slotIdx, x, y } — paste 미확정 상태. 마우스 위치 따라 이동
+let _floating = null;
 
 // state.source / original / pixelized / fileName 은 현재 프레임의 alias
 Object.defineProperty(state, "source", {
@@ -392,6 +394,27 @@ function drawSlot(slotIdx, canvasEl, ctxEl) {
     ctxEl.strokeStyle = "#4a8";
     ctxEl.lineWidth = 2;
     ctxEl.strokeRect(1, 1, cw - 2, ch - 2);
+    ctxEl.restore();
+  }
+
+  // floating paste 미리보기 — 활성 슬롯에만
+  if (_floating && _floating.slotIdx === slotIdx) {
+    const fp = _floating;
+    const px = x + fp.x / iw * dw;
+    const py = y + fp.y / ih * dh;
+    const pw = fp.imageData.width / iw * dw;
+    const ph = fp.imageData.height / ih * dh;
+    ctxEl.save();
+    ctxEl.globalAlpha = 0.75;
+    ctxEl.imageSmoothingEnabled = false;
+    ctxEl.drawImage(imageDataToCanvas2(fp.imageData), px, py, pw, ph);
+    ctxEl.restore();
+    ctxEl.save();
+    ctxEl.strokeStyle = "#ffaa00";
+    ctxEl.lineWidth = 1;
+    ctxEl.setLineDash([4, 3]);
+    ctxEl.strokeRect(Math.round(px) + 0.5, Math.round(py) + 0.5, Math.round(pw), Math.round(ph));
+    ctxEl.setLineDash([]);
     ctxEl.restore();
   }
 }
@@ -1317,6 +1340,15 @@ function setActiveSlot(slotIdx) {
 function onCanvasMouseDown(e, slotIdx) {
   // 슬롯 1이 비활성(frameIdx<0)이면 클릭 무시
   if (slotIdx === 1 && state.slots[1].frameIdx < 0) return;
+
+  // floating paste 활성: 클릭으로 그 위치에 확정 (도구 무시)
+  if (_floating) {
+    e.preventDefault();
+    setActiveSlot(slotIdx);
+    commitFloating();
+    return;
+  }
+
   setActiveSlot(slotIdx);
   const tool = getTool();
   // 팬 우선: 미들버튼 / Space / Ctrl+Shift
@@ -1378,6 +1410,24 @@ canvas.addEventListener("mousedown", (e) => onCanvasMouseDown(e, 0));
 // refCanvas mousedown 등록은 refCanvas 변수가 선언된 후 (아래에서)
 
 window.addEventListener("mousemove", (e) => {
+  // floating paste — 활성 슬롯의 마우스 좌표로 따라 이동
+  if (_floating) {
+    const slotIdx = state.activeSlot;
+    const slot = state.slots[slotIdx];
+    if (slot && slot.layout) {
+      const canvasEl = slotIdx === 0 ? canvas : refCanvas;
+      const rect = canvasEl.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const ix = (cx - slot.layout.x) / slot.layout.dw * slot.layout.iw;
+      const iy = (cy - slot.layout.y) / slot.layout.dh * slot.layout.ih;
+      _floating.slotIdx = slotIdx;
+      _floating.x = Math.round(ix - _floating.imageData.width / 2);
+      _floating.y = Math.round(iy - _floating.imageData.height / 2);
+      redraw();
+    }
+    return;
+  }
   if (isPanning) {
     state.panX = e.clientX - panStart.x;
     state.panY = e.clientY - panStart.y;
@@ -2322,14 +2372,18 @@ window.addEventListener("keydown", (e) => {
   const t = e.target;
   if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
 
-  // ESC: 모달 닫기
+  // ESC: 모달 닫기 / floating 취소 / 선택 해제
   if (e.key === "Escape") {
     if ($("modal-overlay").classList.contains("show")) {
       e.preventDefault();
       hideModal();
       return;
     }
-    // 영역 선택 해제
+    if (_floating) {
+      e.preventDefault();
+      cancelFloating();
+      return;
+    }
     if (state.selection || state.draftSelection) {
       state.selection = null;
       state.draftSelection = null;
@@ -2457,18 +2511,28 @@ function pasteClipboard() {
     setStatus("클립보드가 비어있습니다", "error");
     return;
   }
-  const f = state.frames[state.frameIdx];
-  if (!f) {
-    setStatus("프레임이 없습니다", "error");
-    return;
-  }
+  // floating 모드 시작 — 마우스 따라 이동, 클릭으로 확정
+  _floating = {
+    imageData: _clipboard.imageData,
+    slotIdx: state.activeSlot,
+    x: _clipboard.x,
+    y: _clipboard.y,
+  };
+  document.body.classList.add("floating-paste");
+  redraw();
+  setStatus("마우스로 위치 이동 + 클릭으로 확정 (ESC 취소)", "info");
+}
+
+function commitFloating() {
+  if (!_floating) return;
+  const fp = _floating;
+  const slot = state.slots[fp.slotIdx];
+  if (!slot) { cancelFloating(); return; }
+  const f = state.frames[slot.frameIdx];
+  if (!f || !f.source) { cancelFloating(); return; }
   snapshot();
-  const clip = _clipboard.imageData;
-  const cx = _clipboard.x;
-  const cy = _clipboard.y;
-  const editTraceLayer = state.tracing;
   let target;
-  if (editTraceLayer) {
+  if (state.tracing) {
     if (!f.traceLayer || f.traceLayer.width !== f.source.width || f.traceLayer.height !== f.source.height) {
       f.traceLayer = new ImageData(f.source.width, f.source.height);
     }
@@ -2482,11 +2546,12 @@ function pasteClipboard() {
     f.source = newImg;
     target = newImg;
   }
+  const clip = fp.imageData;
   let pasted = 0;
   for (let y = 0; y < clip.height; y++) {
     for (let x = 0; x < clip.width; x++) {
-      const sx = cx + x;
-      const sy = cy + y;
+      const sx = fp.x + x;
+      const sy = fp.y + y;
       if (sx < 0 || sx >= target.width || sy < 0 || sy >= target.height) continue;
       const ci = (y * clip.width + x) * 4;
       if (clip.data[ci + 3] === 0) continue;
@@ -2498,12 +2563,21 @@ function pasteClipboard() {
       pasted++;
     }
   }
+  _floating = null;
+  document.body.classList.remove("floating-paste");
   invalidateSourceCache();
   refreshPalette();
   renderTimeline();
-  renderRefCanvas();
   redraw();
   setStatus(`붙여넣기 ${pasted}px`, "success");
+}
+
+function cancelFloating() {
+  if (!_floating) return;
+  _floating = null;
+  document.body.classList.remove("floating-paste");
+  redraw();
+  setStatus("취소됨");
 }
 
 // ---------- 참조 캔버스 (슬롯 1) ----------

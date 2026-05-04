@@ -104,6 +104,7 @@ body.ref-on #canvas-ref { width: 50%; }
   cursor: pointer;
   min-width: 110px;
 }
+body.floating-paste #canvas, body.floating-paste #ref-canvas { cursor: copy !important; }
 #stage.dragover::after {
   content: "여기에 놓아 프레임 추가";
   position: absolute;
