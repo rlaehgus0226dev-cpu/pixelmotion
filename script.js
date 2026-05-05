@@ -2823,6 +2823,184 @@ window.addEventListener("keydown", (e) => {
 
 $("btn-shortcuts")?.addEventListener("click", () => showShortcutsModal());
 
+// ===== 수채화 변환 =====
+function renderWatercolor(src, opts) {
+  const scale = Math.max(1, opts.scale || 8);
+  const blur = Math.max(0, opts.blur || 0);
+  const noise = Math.max(0, opts.noise || 0);
+  const bleed = Math.max(0, opts.bleed || 0);
+  const W = src.width, H = src.height;
+  const newW = Math.round(W * scale);
+  const newH = Math.round(H * scale);
+
+  const srcCanvas = document.createElement("canvas");
+  srcCanvas.width = W; srcCanvas.height = H;
+  srcCanvas.getContext("2d").putImageData(src, 0, 0);
+
+  // 1) bilinear 업스케일
+  const up = document.createElement("canvas");
+  up.width = newW; up.height = newH;
+  const uctx = up.getContext("2d");
+  uctx.imageSmoothingEnabled = true;
+  uctx.imageSmoothingQuality = "high";
+  uctx.drawImage(srcCanvas, 0, 0, newW, newH);
+
+  // 2) 블러
+  const out = document.createElement("canvas");
+  out.width = newW; out.height = newH;
+  const octx = out.getContext("2d");
+  octx.filter = blur > 0 ? `blur(${blur}px)` : "none";
+  octx.drawImage(up, 0, 0);
+  octx.filter = "none";
+
+  // 3) 색 번짐 (저채도 오버블러를 살짝 곱셈 합성)
+  if (bleed > 0) {
+    octx.save();
+    octx.filter = `blur(${bleed * 1.5}px) saturate(120%)`;
+    octx.globalAlpha = 0.45;
+    octx.drawImage(up, 0, 0);
+    octx.filter = "none";
+    octx.globalAlpha = 1;
+    octx.restore();
+  }
+
+  const result = octx.getImageData(0, 0, newW, newH);
+
+  // 4) 픽셀별 노이즈
+  if (noise > 0) {
+    const data = result.data;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) continue;
+      const n = (Math.random() - 0.5) * noise * 2;
+      data[i]     = Math.max(0, Math.min(255, data[i] + n));
+      data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + n));
+      data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + n));
+    }
+  }
+  return result;
+}
+
+$("btn-watercolor")?.addEventListener("click", () => {
+  const f = state.frames[state.frameIdx];
+  if (!f || !f.source) { setStatus("프레임이 없습니다", "error"); return; }
+  const W = f.source.width, H = f.source.height;
+
+  showModal("🎨 수채화 변환", `
+    <div style="display:flex; gap:14px; margin-bottom:12px;">
+      <div style="flex:1;">
+        <div style="font-size:11px; color:#888; margin-bottom:4px;">원본 (도트)</div>
+        <div style="background:#1a1a1a; border:1px solid #333; padding:6px; display:flex; justify-content:center; align-items:center; min-height:240px; border-radius:4px;">
+          <canvas id="wc-source-preview" style="image-rendering:pixelated; image-rendering:crisp-edges; max-width:100%; max-height:240px; background:transparent;"></canvas>
+        </div>
+      </div>
+      <div style="flex:1;">
+        <div style="font-size:11px; color:#888; margin-bottom:4px;">수채화 결과 <span id="wc-result-info" style="color:#666;"></span></div>
+        <div style="background:#1a1a1a; border:1px solid #333; padding:6px; display:flex; justify-content:center; align-items:center; min-height:240px; border-radius:4px;">
+          <canvas id="wc-result-preview" style="max-width:100%; max-height:240px; background:transparent;"></canvas>
+        </div>
+      </div>
+    </div>
+    <div style="display:grid; grid-template-columns: auto 1fr 40px; gap:6px 10px; align-items:center; margin-bottom:10px;">
+      <label style="font-size:12px;">업스케일</label>
+      <input type="range" id="wc-scale" value="8" min="2" max="16" step="1" style="width:100%;">
+      <span id="wc-scale-val" style="font-family:Consolas,monospace; font-size:11px; color:#4a8;">×8</span>
+
+      <label style="font-size:12px;">부드러움</label>
+      <input type="range" id="wc-blur" value="3" min="0" max="10" step="0.5" style="width:100%;">
+      <span id="wc-blur-val" style="font-family:Consolas,monospace; font-size:11px; color:#4a8;">3</span>
+
+      <label style="font-size:12px;">색 번짐</label>
+      <input type="range" id="wc-bleed" value="2" min="0" max="8" step="0.5" style="width:100%;">
+      <span id="wc-bleed-val" style="font-family:Consolas,monospace; font-size:11px; color:#4a8;">2</span>
+
+      <label style="font-size:12px;">노이즈</label>
+      <input type="range" id="wc-noise" value="10" min="0" max="40" step="1" style="width:100%;">
+      <span id="wc-noise-val" style="font-family:Consolas,monospace; font-size:11px; color:#4a8;">10</span>
+    </div>
+    <div class="modal-info" style="font-size:11px;">파라미터 조절 시 우측 미리보기 자동 갱신. [PNG 저장]은 위 업스케일 그대로, [현재 프레임에 적용]은 source 교체 (Ctrl+Z).</div>
+    <div class="modal-row" style="justify-content:flex-end;">
+      <button id="wc-apply">현재 프레임에 적용</button>
+      <button id="wc-save" class="primary">PNG 저장</button>
+    </div>
+  `);
+
+  // 원본 미리보기
+  const srcPv = $("wc-source-preview");
+  const srcDisp = Math.min(240, Math.max(W, H) * 4);
+  const ratio = srcDisp / Math.max(W, H);
+  srcPv.width = Math.round(W * ratio);
+  srcPv.height = Math.round(H * ratio);
+  const sctx = srcPv.getContext("2d");
+  sctx.imageSmoothingEnabled = false;
+  sctx.drawImage(imageDataToCanvas2(f.source), 0, 0, srcPv.width, srcPv.height);
+
+  let lastFullResult = null;
+  let renderTimer = null;
+
+  function updateResult() {
+    const scale = parseInt($("wc-scale").value, 10);
+    const blur = parseFloat($("wc-blur").value);
+    const noise = parseFloat($("wc-noise").value);
+    const bleed = parseFloat($("wc-bleed").value);
+    $("wc-scale-val").textContent = `×${scale}`;
+    $("wc-blur-val").textContent = blur.toString();
+    $("wc-noise-val").textContent = noise.toString();
+    $("wc-bleed-val").textContent = bleed.toString();
+
+    // 미리보기는 가벼운 사이즈로 (max 256)
+    const pvScale = Math.max(2, Math.min(scale, Math.floor(256 / Math.max(W, H))));
+    const result = renderWatercolor(f.source, { scale: pvScale, blur, noise, bleed });
+    lastFullResult = { scale, blur, noise, bleed };
+
+    const rc = $("wc-result-preview");
+    rc.width = result.width; rc.height = result.height;
+    rc.getContext("2d").putImageData(result, 0, 0);
+    $("wc-result-info").textContent = `미리보기 ${result.width}×${result.height} / 저장 시 ${W*scale}×${H*scale}`;
+  }
+
+  function debounceUpdate() {
+    if (renderTimer) clearTimeout(renderTimer);
+    renderTimer = setTimeout(updateResult, 80);
+  }
+
+  ["wc-scale","wc-blur","wc-noise","wc-bleed"].forEach(id => {
+    $(id).addEventListener("input", debounceUpdate);
+  });
+
+  $("wc-save").addEventListener("click", () => {
+    if (!lastFullResult) return;
+    const o = lastFullResult;
+    setStatus(`수채화 렌더링 중... (${W*o.scale}×${H*o.scale})`, "processing");
+    setTimeout(() => {
+      const full = renderWatercolor(f.source, o);
+      const c = freshCanvas(full);
+      c.toBlob((blob) => {
+        const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+        const base = stripExt(f.fileName) || "watercolor";
+        downloadBlob(blob, `${base}_watercolor_${full.width}x${full.height}_${ts}.png`);
+        setStatus(`저장 완료: ${full.width}×${full.height}`, "success");
+      });
+    }, 30);
+  });
+
+  $("wc-apply").addEventListener("click", () => {
+    if (!lastFullResult) return;
+    if (!confirm("현재 프레임의 source를 수채화 결과로 교체합니다 (Ctrl+Z로 되돌리기). 진행?")) return;
+    snapshot();
+    const full = renderWatercolor(f.source, lastFullResult);
+    f.source = full;
+    f.pixelized = false;
+    invalidateSourceCache();
+    refreshPalette();
+    renderTimeline();
+    redraw();
+    hideModal();
+    setStatus("수채화 변환 적용", "success");
+  });
+
+  updateResult();
+});
+
 // ===== 재생 미리보기 모달 =====
 $("btn-preview")?.addEventListener("click", () => {
   if (state.frames.length < 1) { setStatus("프레임이 없습니다", "error"); return; }

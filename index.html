@@ -5,7 +5,7 @@
 <title>PixelMotion</title>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js"></script>
-<link rel="stylesheet" href="style.css?v=17">
+<link rel="stylesheet" href="style.css?v=18">
 </head>
 <body>
 
@@ -340,6 +340,24 @@
       </div>
     </details>
 
+    <!-- 수채화 변환 -->
+    <details class="panel-section" id="ps-watercolor">
+      <summary>🎨 수채화 변환 <span class="help-icon" data-help="도트로 그린 작품을 부드러운 수채화 풍으로 변환.
+
+알고리즘
+  1. ×N 부드러운 보간 업스케일 (bilinear)
+  2. Gaussian 블러 (도트 경계 흐림)
+  3. 색 번짐 (saturate + 오버블러 합성)
+  4. 픽셀별 미세 노이즈 (종이 텍스처)
+
+원본 도트 캔버스는 보존됨 (변환은 별도 출력).
+
+[현재 프레임에 적용] 시에만 source 교체 (Ctrl+Z로 되돌리기 가능).">?</span></summary>
+      <div class="row">
+        <button id="btn-watercolor" style="width:100%;">🎨 수채화 변환 (모달 열기)</button>
+      </div>
+    </details>
+
     <!-- 배경 제거 -->
     <details class="panel-section" open id="ps-bg">
       <summary>배경 제거 (rembg) <span class="help-icon" data-help="AI(rembg)로 자동 배경 제거.
@@ -424,6 +442,6 @@ ON: 브러시/지우개가 별도 trace 레이어에만 적용 (원본 보존)
   </div>
 </div>
 
-<script src="script.js?v=17"></script>
+<script src="script.js?v=18"></script>
 </body>
 </html>
