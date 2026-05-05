@@ -5,7 +5,7 @@
 <title>PixelMotion</title>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js"></script>
-<link rel="stylesheet" href="style.css?v=13">
+<link rel="stylesheet" href="style.css?v=15">
 </head>
 <body>
 
@@ -37,6 +37,7 @@
   </label>
   <label class="checkbox"><input type="checkbox" id="show-grid" checked>격자</label>
   <label class="checkbox"><input type="checkbox" id="show-subgrid" checked>세분 라인</label>
+  <button id="btn-preview" title="재생 미리보기 모달 (1×/2×/4× 동시)">▶ 미리보기</button>
   <button id="btn-shortcuts" title="단축키 (F1)">⌨ 단축키</button>
   <div id="file-info"></div>
 </div>
@@ -121,7 +122,7 @@
         <button id="btn-clear-sel" style="width:100%;">선택 해제</button>
       </div>
       <div class="row">
-        <button id="btn-flip-h" style="width:100%;" title="현재 프레임 좌우 반전">↔ 좌우 반전</button>
+        <button id="btn-flip-h" style="width:100%;" title="현재 프레임 좌우 반전 / Shift+클릭 = 모든 프레임 일괄">↔ 좌우 반전 (Shift+클릭=일괄)</button>
       </div>
     </details>
 
@@ -199,6 +200,13 @@
         <button id="tl-play" title="재생">▶ 재생</button>
         <button id="tl-stop" title="정지" disabled>⏸</button>
         <label class="topbar-label">FPS <input type="number" id="tl-fps" value="12" min="1" max="60" style="width:42px;"></label>
+        <label class="topbar-label">반복
+          <select id="tl-play-mode" title="재생 반복 모드">
+            <option value="loop" selected>루프</option>
+            <option value="once">원샷</option>
+            <option value="pingpong">핑퐁</option>
+          </select>
+        </label>
         <div class="topbar-divider"></div>
         <label class="topbar-label">어니언
           <select id="onion-range">
@@ -211,6 +219,7 @@
         <label class="checkbox"><input type="checkbox" id="onion-tint">색 틴트</label>
         <div class="topbar-divider"></div>
         <button id="btn-layer-add" title="현재 사이즈로 빈 프레임 추가">+ 빈 프레임</button>
+        <button id="btn-layer-dup" title="현재 프레임 복제 (Ctrl+D)">+ 복제</button>
         <button id="tl-remove" title="현재 프레임 삭제">삭제</button>
         <div class="topbar-divider"></div>
         <label class="topbar-label">참조
@@ -406,6 +415,6 @@ ON: 브러시/지우개가 별도 trace 레이어에만 적용 (원본 보존)
   </div>
 </div>
 
-<script src="script.js?v=14"></script>
+<script src="script.js?v=15"></script>
 </body>
 </html>

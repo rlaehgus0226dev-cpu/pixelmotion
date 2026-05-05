@@ -436,14 +436,15 @@ function drawSlot(slotIdx, canvasEl, ctxEl) {
   // floating paste 미리보기 — 활성 슬롯에만
   if (_floating && _floating.slotIdx === slotIdx) {
     const fp = _floating;
+    const fpImg = fp.rotated || fp.imageData;
     const px = x + fp.x / iw * dw;
     const py = y + fp.y / ih * dh;
-    const pw = fp.imageData.width / iw * dw;
-    const ph = fp.imageData.height / ih * dh;
+    const pw = fpImg.width / iw * dw;
+    const ph = fpImg.height / ih * dh;
     ctxEl.save();
     ctxEl.globalAlpha = 0.75;
     ctxEl.imageSmoothingEnabled = false;
-    ctxEl.drawImage(imageDataToCanvas2(fp.imageData), px, py, pw, ph);
+    ctxEl.drawImage(imageDataToCanvas2(fpImg), px, py, pw, ph);
     ctxEl.restore();
     ctxEl.save();
     ctxEl.strokeStyle = "#ffaa00";
@@ -451,6 +452,12 @@ function drawSlot(slotIdx, canvasEl, ctxEl) {
     ctxEl.setLineDash([4, 3]);
     ctxEl.strokeRect(Math.round(px) + 0.5, Math.round(py) + 0.5, Math.round(pw), Math.round(ph));
     ctxEl.setLineDash([]);
+    // 각도 표시
+    if (fp.rotation) {
+      ctxEl.fillStyle = "rgba(255,170,0,0.95)";
+      ctxEl.font = "bold 11px Consolas, monospace";
+      ctxEl.fillText(`${Math.round(fp.rotation)}°`, Math.round(px) + 4, Math.round(py) + 13);
+    }
     ctxEl.restore();
   }
 }
@@ -562,6 +569,23 @@ function drawSelectionInternal(ctxEl, slotIdx) {
     });
     if (!isDraft) ctxEl.closePath();
     ctxEl.stroke();
+  } else if (sel.type === "mask" && sel.mask) {
+    // 마스크 셀을 반투명 오렌지로 채워 표시
+    const off = document.createElement("canvas");
+    off.width = sel.w; off.height = sel.h;
+    const oc = off.getContext("2d");
+    const od = new ImageData(sel.w, sel.h);
+    for (let i = 0; i < sel.mask.length; i++) {
+      if (sel.mask[i]) {
+        od.data[i * 4 + 0] = 255;
+        od.data[i * 4 + 1] = 170;
+        od.data[i * 4 + 2] = 0;
+        od.data[i * 4 + 3] = 80;
+      }
+    }
+    oc.putImageData(od, 0, 0);
+    ctxEl.imageSmoothingEnabled = false;
+    ctxEl.drawImage(off, x, y, dw, dh);
   }
   ctxEl.setLineDash([]);
   ctxEl.restore();
@@ -1634,9 +1658,10 @@ window.addEventListener("mousemove", (e) => {
       const cy = e.clientY - rect.top;
       const ix = (cx - slot.layout.x) / slot.layout.dw * slot.layout.iw;
       const iy = (cy - slot.layout.y) / slot.layout.dh * slot.layout.ih;
+      const fpImg = _floating.rotated || _floating.imageData;
       _floating.slotIdx = slotIdx;
-      _floating.x = Math.round(ix - _floating.imageData.width / 2);
-      _floating.y = Math.round(iy - _floating.imageData.height / 2);
+      _floating.x = Math.round(ix - fpImg.width / 2);
+      _floating.y = Math.round(iy - fpImg.height / 2);
       redraw();
     }
     return;
@@ -1819,6 +1844,10 @@ function pointInPolygon(px, py, points) {
 
 function buildSelectionMask(sel, W, H, mode) {
   const mask = new Uint8Array(W * H);
+  if (sel.type === "mask" && sel.mask && sel.w === W && sel.h === H) {
+    mask.set(sel.mask);
+    return mask;
+  }
   if (sel.type === "rect") {
     const x1 = Math.min(sel.x1, sel.x2);
     const y1 = Math.min(sel.y1, sel.y2);
@@ -2215,14 +2244,16 @@ function flipHorizontal(img) {
   return out;
 }
 
-$("btn-flip-h").addEventListener("click", () => {
-  if (!state.source) {
-    setStatus("이미지를 먼저 열어주세요");
+$("btn-flip-h").addEventListener("click", (e) => {
+  if (state.frames.length === 0) {
+    setStatus("프레임이 없습니다", "error");
     return;
   }
   snapshot();
-  const f = state.frames[state.frameIdx];
-  if (f) {
+  // Shift 클릭 = 모든 프레임 일괄
+  const targets = e.shiftKey ? state.frames : [state.frames[state.frameIdx]];
+  for (const f of targets) {
+    if (!f) continue;
     f.source = flipHorizontal(f.source);
     f.original = flipHorizontal(f.original);
     if (f.traceLayer) f.traceLayer = flipHorizontal(f.traceLayer);
@@ -2233,7 +2264,7 @@ $("btn-flip-h").addEventListener("click", () => {
   refreshPalette();
   renderTimeline();
   redraw();
-  setStatus("좌우 반전 완료");
+  setStatus(e.shiftKey ? `모든 프레임 좌우 반전 (${targets.length}장)` : "좌우 반전 완료", "success");
 });
 
 // ---------- 트레이싱 ----------
@@ -2658,12 +2689,60 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
-  // Ctrl+C / Ctrl+V / Ctrl+X
+  // Ctrl+C / Ctrl+V / Ctrl+X / Ctrl+D
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
     const k = e.key.toLowerCase();
     if (k === "c") { e.preventDefault(); copySelection(false); return; }
     if (k === "v") { e.preventDefault(); pasteClipboard(); return; }
     if (k === "x") { e.preventDefault(); copySelection(true); return; }
+    if (k === "d") { e.preventDefault(); duplicateCurrentFrame(); return; }
+  }
+
+  // 프레임 이동 ← / →
+  if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (e.key === "ArrowLeft" && state.frames.length > 1) {
+      e.preventDefault();
+      selectFrame((state.frameIdx - 1 + state.frames.length) % state.frames.length);
+      return;
+    }
+    if (e.key === "ArrowRight" && state.frames.length > 1) {
+      e.preventDefault();
+      selectFrame((state.frameIdx + 1) % state.frames.length);
+      return;
+    }
+  }
+
+  // Delete / Backspace = 선택 영역 비우기
+  if ((e.key === "Delete" || e.key === "Backspace") && state.selection) {
+    e.preventDefault();
+    clearSelectionContent();
+    return;
+  }
+
+  // Ctrl+Shift+I = 선택 반전
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "i") {
+    e.preventDefault();
+    invertSelection();
+    return;
+  }
+
+  // R: floating paste 회전
+  if (_floating && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (e.key === "r" || e.key === "R") {
+      e.preventDefault();
+      if (e.shiftKey) {
+        // 임의 각도 입력
+        const cur = Math.round(_floating.rotation || 0);
+        const inp = prompt("회전 각도 (0~359°)", String(cur));
+        if (inp !== null) {
+          const v = parseFloat(inp);
+          if (!isNaN(v)) rotateFloating(v, true);
+        }
+      } else {
+        rotateFloating(90);
+      }
+      return;
+    }
   }
 
   // 도구 전환 (modifier 없을 때만)
@@ -2677,6 +2756,86 @@ window.addEventListener("keydown", (e) => {
 });
 
 $("btn-shortcuts")?.addEventListener("click", () => showShortcutsModal());
+
+// ===== 재생 미리보기 모달 =====
+$("btn-preview")?.addEventListener("click", () => {
+  if (state.frames.length < 1) { setStatus("프레임이 없습니다", "error"); return; }
+  let timer = null;
+  let idx = 0;
+  let dir = 1;
+  const sizes = [1, 2, 4, 8];
+  showModal("재생 미리보기", `
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
+      <label>FPS <input type="number" id="pv-fps" value="${$('tl-fps').value}" min="1" max="60" style="width:48px;"></label>
+      <label>모드
+        <select id="pv-mode">
+          <option value="loop" ${getPlayMode()==='loop'?'selected':''}>루프</option>
+          <option value="once" ${getPlayMode()==='once'?'selected':''}>원샷</option>
+          <option value="pingpong" ${getPlayMode()==='pingpong'?'selected':''}>핑퐁</option>
+        </select>
+      </label>
+      <button id="pv-play" class="primary">▶ 재생</button>
+      <button id="pv-stop" disabled>⏸ 정지</button>
+      <span id="pv-info" class="modal-info" style="margin-left:auto;">프레임 1/${state.frames.length}</span>
+    </div>
+    <div id="pv-stage" style="background:#111; border:1px solid #333; border-radius:6px; padding:14px; display:flex; gap:14px; justify-content:center; align-items:center; min-height:240px; flex-wrap:wrap;">
+      ${sizes.map(s => `<div style="text-align:center;">
+        <canvas class="pv-canvas" data-scale="${s}" style="image-rendering:pixelated; background:transparent; border:1px solid #333;"></canvas>
+        <div style="font-size:11px; color:#888; margin-top:4px;">×${s}</div>
+      </div>`).join('')}
+    </div>
+    <div class="modal-info" style="margin-top:8px;">실제 표시: 픽셀 NEAREST 보간 / 4단계 동시 재생</div>
+  `, () => { if (timer) clearInterval(timer); });
+
+  function drawAt(i) {
+    const f = state.frames[i];
+    if (!f || !f.source) return;
+    const src = compositeFrame(f) || f.source;
+    document.querySelectorAll(".pv-canvas").forEach(c => {
+      const sc = parseInt(c.dataset.scale, 10);
+      c.width = src.width * sc;
+      c.height = src.height * sc;
+      const ctx = c.getContext("2d");
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(imageDataToCanvas2(src), 0, 0, c.width, c.height);
+    });
+    $("pv-info").textContent = `프레임 ${i + 1}/${state.frames.length}`;
+  }
+
+  function step() {
+    const N = state.frames.length;
+    const mode = $("pv-mode").value;
+    if (mode === "pingpong") {
+      let next = idx + dir;
+      if (next >= N) { dir = -1; next = idx - 1; }
+      else if (next < 0) { dir = 1; next = idx + 1; }
+      idx = Math.max(0, Math.min(N - 1, next));
+    } else if (mode === "once") {
+      if (idx + 1 >= N) { stop(); return; }
+      idx++;
+    } else {
+      idx = (idx + 1) % N;
+    }
+    drawAt(idx);
+  }
+  function start() {
+    if (timer) clearInterval(timer);
+    const fps = Math.max(1, parseInt($("pv-fps").value, 10) || 12);
+    dir = 1;
+    timer = setInterval(step, 1000 / fps);
+    $("pv-play").disabled = true;
+    $("pv-stop").disabled = false;
+  }
+  function stop() {
+    if (timer) { clearInterval(timer); timer = null; }
+    $("pv-play").disabled = false;
+    $("pv-stop").disabled = true;
+  }
+  $("pv-play").addEventListener("click", start);
+  $("pv-stop").addEventListener("click", stop);
+  $("pv-fps").addEventListener("input", () => { if (timer) start(); });
+  drawAt(idx);
+});
 
 // ---------- 복사 / 붙여넣기 / 잘라내기 ----------
 
@@ -2753,6 +2912,49 @@ function copySelection(cut = false) {
   }
 }
 
+// NEAREST 회전 — 출력 픽셀마다 역회전해서 가장 가까운 소스 픽셀 색을 그대로
+function rotateImageNearest(img, angleDeg) {
+  if (!img) return null;
+  const a = ((angleDeg % 360) + 360) % 360;
+  if (a === 0) return img;
+  const rad = a * Math.PI / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const W = img.width, H = img.height;
+  const cx = W / 2, cy = H / 2;
+  // 새 bbox
+  const corners = [[-cx,-cy],[cx,-cy],[-cx,cy],[cx,cy]];
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [x, y] of corners) {
+    const nx = x * cos - y * sin;
+    const ny = x * sin + y * cos;
+    if (nx < minX) minX = nx; if (nx > maxX) maxX = nx;
+    if (ny < minY) minY = ny; if (ny > maxY) maxY = ny;
+  }
+  const newW = Math.ceil(maxX - minX);
+  const newH = Math.ceil(maxY - minY);
+  const ncx = newW / 2, ncy = newH / 2;
+  const out = new ImageData(newW, newH);
+  const od = out.data, sd = img.data;
+  for (let y = 0; y < newH; y++) {
+    for (let x = 0; x < newW; x++) {
+      const dx = x - ncx, dy = y - ncy;
+      // 역회전 → 소스 좌표
+      const sx = dx * cos + dy * sin + cx;
+      const sy = -dx * sin + dy * cos + cy;
+      const ix = Math.floor(sx), iy = Math.floor(sy);
+      if (ix >= 0 && ix < W && iy >= 0 && iy < H) {
+        const si = (iy * W + ix) * 4;
+        const di = (y * newW + x) * 4;
+        od[di] = sd[si];
+        od[di+1] = sd[si+1];
+        od[di+2] = sd[si+2];
+        od[di+3] = sd[si+3];
+      }
+    }
+  }
+  return out;
+}
+
 function pasteClipboard() {
   if (!_clipboard) {
     setStatus("클립보드가 비어있습니다", "error");
@@ -2760,14 +2962,25 @@ function pasteClipboard() {
   }
   // floating 모드 시작 — 마우스 따라 이동, 클릭으로 확정
   _floating = {
-    imageData: _clipboard.imageData,
+    imageData: _clipboard.imageData,  // 원본 (회전의 시드)
+    rotated: _clipboard.imageData,    // 현재 표시되는 회전된 버전
+    rotation: 0,
     slotIdx: state.activeSlot,
     x: _clipboard.x,
     y: _clipboard.y,
   };
   document.body.classList.add("floating-paste");
   redraw();
-  setStatus("마우스로 위치 이동 + 클릭으로 확정 (ESC 취소)", "info");
+  setStatus("이동: 마우스 / 회전: R(90°) / Shift+R(임의각) / 확정: 클릭 / 취소: ESC");
+}
+
+function rotateFloating(deltaDeg, absolute = false) {
+  if (!_floating) return;
+  const newRot = absolute ? deltaDeg : (_floating.rotation + deltaDeg);
+  _floating.rotation = ((newRot % 360) + 360) % 360;
+  _floating.rotated = rotateImageNearest(_floating.imageData, _floating.rotation);
+  // 회전 후 크기 변경 시 마우스 위치 중심 유지
+  redraw();
 }
 
 function commitFloating() {
@@ -2793,7 +3006,7 @@ function commitFloating() {
     f.source = newImg;
     target = newImg;
   }
-  const clip = fp.imageData;
+  const clip = fp.rotated || fp.imageData;
   let pasted = 0;
   for (let y = 0; y < clip.height; y++) {
     for (let x = 0; x < clip.width; x++) {
@@ -2929,32 +3142,42 @@ window.addEventListener("resize", () => {
 
 function showShortcutsModal() {
   showModal("단축키 안내", `
-    <div style="display:grid; grid-template-columns: auto 1fr; gap:8px 18px; font-size:13px;">
-      <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:4px;">파일/저장</div>
-      <kbd>Ctrl+S</kbd><span>저장 메뉴 열기</span>
-      <kbd>Ctrl+Z</kbd><span>되돌리기 (배경 제거 / 도트화 / 픽셀 편집)</span>
+    <div style="display:grid; grid-template-columns: auto 1fr; gap:6px 18px; font-size:13px;">
+      <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:4px;">파일/되돌리기</div>
+      <kbd>Ctrl+S</kbd><span>저장 메뉴</span>
+      <kbd>Ctrl+Z</kbd><span>되돌리기 (배경/도트화/편집)</span>
 
-      <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:8px;">도구 전환</div>
-      <kbd>V</kbd><span>선택 없음</span>
-      <kbd>M</kbd><span>사각형 영역 (Marquee)</span>
-      <kbd>L</kbd><span>올가미 영역</span>
-      <kbd>I</kbd><span>스포이드</span>
-      <kbd>B</kbd><span>브러시</span>
-      <kbd>E</kbd><span>지우개</span>
+      <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:8px;">도구</div>
+      <kbd>V</kbd><span>없음 / <kbd>M</kbd> 사각형 / <kbd>L</kbd> 올가미</span>
+      <kbd>B</kbd><span>브러시 / <kbd>E</kbd> 지우개 / <kbd>I</kbd> 스포이드</span>
+      <kbd>브러시 우클릭</kbd><span>임시 지우개 (Aseprite 스타일)</span>
 
-      <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:8px;">화면 조작</div>
-      <kbd>마우스 휠</kbd><span>줌 (커서 위치 기준)</span>
+      <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:8px;">선택 영역</div>
+      <kbd>Ctrl+C</kbd><span>복사 / <kbd>Ctrl+X</kbd> 잘라내기 / <kbd>Ctrl+V</kbd> 붙여넣기</span>
+      <kbd>Delete</kbd><span>선택 영역 비우기 (= 지우기)</span>
+      <kbd>Ctrl+Shift+I</kbd><span>선택 반전</span>
+
+      <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:8px;">붙여넣기 후 (floating)</div>
+      <kbd>마우스 이동</kbd><span>위치 조정</span>
+      <kbd>R</kbd><span>90° 회전 (NEAREST 픽셀 재정의)</span>
+      <kbd>Shift+R</kbd><span>임의 각도 입력</span>
+      <kbd>클릭</kbd><span>확정 / <kbd>ESC</kbd> 취소</span>
+
+      <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:8px;">프레임</div>
+      <kbd>← / →</kbd><span>이전/다음 프레임</span>
+      <kbd>Ctrl+D</kbd><span>현재 프레임 복제</span>
+      <kbd>Shift + ↔ 반전</kbd><span>모든 프레임 일괄 좌우 반전</span>
+
+      <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:8px;">화면</div>
+      <kbd>휠</kbd><span>커서 기준 줌</span>
       <kbd>+ / -</kbd><span>줌 인/아웃</span>
-      <kbd>0</kbd><span>화면 맞춤 (FIT)</span>
-      <kbd>1</kbd><span>100%</span>
-      <kbd>Space + 드래그</kbd><span>임시 팬</span>
-      <kbd>Ctrl+Shift + 드래그</kbd><span>임시 팬</span>
-      <kbd>마우스 미들 드래그</kbd><span>팬</span>
+      <kbd>0</kbd><span>FIT / <kbd>1</kbd> 100%</span>
+      <kbd>Space / Ctrl+Shift / 미들버튼 + 드래그</kbd><span>팬</span>
 
       <div style="font-weight:bold; color:#4a8; grid-column:1/-1; margin-top:8px;">기타</div>
-      <kbd>ESC</kbd><span>모달 닫기 / 영역 선택 해제</span>
+      <kbd>ESC</kbd><span>모달 닫기 / 선택 해제 / floating 취소</span>
       <kbd>F1</kbd><span>이 단축키 안내</span>
-      <kbd>이미지 드래그앤드롭</kbd><span>캔버스에 끌어 놓아 프레임 추가</span>
+      <kbd>드래그앤드롭</kbd><span>이미지 → 새 프레임</span>
     </div>
   `);
 }
@@ -3242,8 +3465,9 @@ document.getElementById("btn-layers-all-hide")?.addEventListener("click", () => 
   redraw();
 });
 
-document.getElementById("btn-layer-add")?.addEventListener("click", () => {
-  // 활성 프레임이 도트화된 상태면 같은 도트 사이즈, 아니면 격자×세분
+document.getElementById("btn-layer-add")?.addEventListener("click", () => addBlankFrame());
+
+function addBlankFrame() {
   const f = state.frames[state.frameIdx];
   const n = (f && f.pixelized && f.source)
     ? f.source.width
@@ -3260,8 +3484,7 @@ document.getElementById("btn-layer-add")?.addEventListener("click", () => {
   });
   state.frameIdx = state.frames.length - 1;
   state.zoom = "fit";
-  state.panX = 0;
-  state.panY = 0;
+  state.panX = 0; state.panY = 0;
   state.selection = null;
   state.draftSelection = null;
   invalidateSourceCache();
@@ -3270,7 +3493,87 @@ document.getElementById("btn-layer-add")?.addEventListener("click", () => {
   renderTimeline();
   redraw();
   setStatus(`빈 프레임 추가됨 (${n}×${n})`, "success");
-});
+}
+
+function clearSelectionContent() {
+  if (!state.selection || !state.source) return;
+  const W = state.source.width, H = state.source.height;
+  const mask = buildSelectionMask(state.selection, W, H, "touch");
+  const f = state.frames[state.frameIdx];
+  if (!f) return;
+  snapshot();
+  const target = state.tracing && f.traceLayer ? f.traceLayer : f.source;
+  const newImg = new ImageData(W, H);
+  newImg.data.set(target.data);
+  let cleared = 0;
+  for (let i = 0; i < W * H; i++) {
+    if (mask[i] && newImg.data[i * 4 + 3] > 0) {
+      newImg.data[i * 4 + 3] = 0;
+      cleared++;
+    }
+  }
+  if (state.tracing) f.traceLayer = newImg;
+  else f.source = newImg;
+  invalidateSourceCache();
+  refreshPalette();
+  renderTimeline();
+  redraw();
+  setStatus(`${cleared} 도트 비움`, "success");
+}
+
+function invertSelection() {
+  if (!state.source) return;
+  const W = state.source.width, H = state.source.height;
+  if (!state.selection) {
+    // 선택 없으면 전체 = 빈 영역으로 반전 → 그냥 전체 사각형 선택
+    state.selection = { type: "rect", x1: 0, y1: 0, x2: W, y2: H };
+    redraw();
+    setStatus("전체 선택", "success");
+    return;
+  }
+  // 기존 선택을 마스크화 → 반전 마스크 → bounding rect 또는 다각형으로 변환은 어려우니
+  // 마스크 자체를 selection으로 보관하는 새 형식 도입: type: "mask"
+  const mask = buildSelectionMask(state.selection, W, H, "touch");
+  const inv = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) inv[i] = mask[i] ? 0 : 1;
+  state.selection = { type: "mask", mask: inv, w: W, h: H };
+  redraw();
+  setStatus("선택 반전", "success");
+}
+
+function duplicateCurrentFrame() {
+  if (state.frames.length === 0) return;
+  const cur = state.frames[state.frameIdx];
+  if (!cur || !cur.source) return;
+  const cloneImg = (img) => {
+    if (!img) return null;
+    const out = new ImageData(img.width, img.height);
+    out.data.set(img.data);
+    return out;
+  };
+  const idx = state.frames.length + 1;
+  const dup = {
+    source: cloneImg(cur.source),
+    original: cloneImg(cur.original),
+    pixelized: cur.pixelized,
+    fileName: cur.fileName,
+    name: (cur.name || `프레임 ${state.frameIdx + 1}`) + " 복사",
+    traceLayer: cloneImg(cur.traceLayer),
+    visible: true, opacity: 1.0,
+  };
+  // 현재 프레임 바로 다음에 삽입
+  state.frames.splice(state.frameIdx + 1, 0, dup);
+  state.frameIdx = state.frameIdx + 1;
+  state.selection = null;
+  state.draftSelection = null;
+  invalidateSourceCache();
+  refreshPalette();
+  renderTimeline();
+  redraw();
+  setStatus(`프레임 복제됨 (${state.frameIdx + 1}/${state.frames.length})`, "success");
+}
+
+document.getElementById("btn-layer-dup")?.addEventListener("click", duplicateCurrentFrame);
 
 $("tl-remove").addEventListener("click", () => {
   if (state.frames.length === 0) return;
@@ -3286,36 +3589,63 @@ $("tl-next").addEventListener("click", () => {
 });
 
 let playInterval = null;
-$("tl-play").addEventListener("click", () => {
+let playDirection = 1;  // 핑퐁용
+
+function getPlayMode() {
+  const sel = document.getElementById("tl-play-mode");
+  return sel ? sel.value : "loop";
+}
+
+function playStep() {
+  if (state.frames.length < 2) return;
+  const N = state.frames.length;
+  const mode = getPlayMode();
+  if (mode === "pingpong") {
+    let next = state.frameIdx + playDirection;
+    if (next >= N) { playDirection = -1; next = state.frameIdx - 1; }
+    else if (next < 0) { playDirection = 1; next = state.frameIdx + 1; }
+    state.frameIdx = Math.max(0, Math.min(N - 1, next));
+  } else if (mode === "once") {
+    if (state.frameIdx + 1 >= N) {
+      // 끝 → 정지
+      stopPlayback();
+      return;
+    }
+    state.frameIdx = state.frameIdx + 1;
+  } else {
+    state.frameIdx = (state.frameIdx + 1) % N;
+  }
+  invalidateSourceCache();
+  renderTimeline();
+  redraw();
+}
+
+function startPlayback() {
   if (state.frames.length < 2) return;
   if (playInterval) clearInterval(playInterval);
+  playDirection = 1;
   const fps = Math.max(1, parseInt($("tl-fps").value, 10) || 12);
   $("tl-play").disabled = true;
   $("tl-stop").disabled = false;
-  playInterval = setInterval(() => {
-    state.frameIdx = (state.frameIdx + 1) % state.frames.length;
-    invalidateSourceCache();
-    renderTimeline();
-    redraw();
-  }, 1000 / fps);
-});
-$("tl-stop").addEventListener("click", () => {
+  playInterval = setInterval(playStep, 1000 / fps);
+}
+
+function stopPlayback() {
   if (playInterval) { clearInterval(playInterval); playInterval = null; }
   $("tl-play").disabled = false;
   $("tl-stop").disabled = true;
-});
+}
+
+$("tl-play").addEventListener("click", startPlayback);
+$("tl-stop").addEventListener("click", stopPlayback);
 $("tl-fps").addEventListener("input", () => {
   if (playInterval) {
     clearInterval(playInterval);
     const fps = Math.max(1, parseInt($("tl-fps").value, 10) || 12);
-    playInterval = setInterval(() => {
-      state.frameIdx = (state.frameIdx + 1) % state.frames.length;
-      invalidateSourceCache();
-      renderTimeline();
-      redraw();
-    }, 1000 / fps);
+    playInterval = setInterval(playStep, 1000 / fps);
   }
 });
+$("tl-play-mode")?.addEventListener("change", () => { playDirection = 1; });
 $("onion-range")?.addEventListener("change", redraw);
 $("onion-tint")?.addEventListener("change", redraw);
 // (tl-add 제거됨 — + 이미지는 상단 탑바에만)
