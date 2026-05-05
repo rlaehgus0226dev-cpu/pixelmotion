@@ -5,7 +5,7 @@
 <title>PixelMotion</title>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js"></script>
-<link rel="stylesheet" href="style.css?v=18">
+<link rel="stylesheet" href="style.css?v=19">
 </head>
 <body>
 
@@ -340,21 +340,22 @@
       </div>
     </details>
 
-    <!-- 수채화 변환 -->
+    <!-- 스타일 변환 -->
     <details class="panel-section" id="ps-watercolor">
-      <summary>🎨 수채화 변환 <span class="help-icon" data-help="도트로 그린 작품을 부드러운 수채화 풍으로 변환.
+      <summary>🎨 스타일 변환 <span class="help-icon" data-help="도트 작품을 다른 스타일로 변환.
 
-알고리즘
-  1. ×N 부드러운 보간 업스케일 (bilinear)
-  2. Gaussian 블러 (도트 경계 흐림)
-  3. 색 번짐 (saturate + 오버블러 합성)
-  4. 픽셀별 미세 노이즈 (종이 텍스처)
+스타일 5가지
+  • 수채화 (정통) — 엣지 진해짐 + 종이 결 + 톤 압축
+  • 유화 — 큰 붓터치 + 진한 채도
+  • 연필 스케치 — 회색조 + 엣지 강조 + 종이결
+  • 잉크 — 깔끔 색채움 + 검은 라인
+  • 소프트 블러 — 단순 흐림 (가벼움)
 
-원본 도트 캔버스는 보존됨 (변환은 별도 출력).
+각 스타일마다 다른 슬라이더 4개. 라이브 미리보기 후 PNG 저장 또는 현재 프레임에 적용.
 
-[현재 프레임에 적용] 시에만 source 교체 (Ctrl+Z로 되돌리기 가능).">?</span></summary>
+원본 도트 캔버스는 보존됨 (변환은 별도 출력). [적용] 시에만 source 교체 (Ctrl+Z로 되돌리기).">?</span></summary>
       <div class="row">
-        <button id="btn-watercolor" style="width:100%;">🎨 수채화 변환 (모달 열기)</button>
+        <button id="btn-watercolor" style="width:100%;">🎨 스타일 변환 (모달 열기)</button>
       </div>
     </details>
 
@@ -442,6 +443,6 @@ ON: 브러시/지우개가 별도 trace 레이어에만 적용 (원본 보존)
   </div>
 </div>
 
-<script src="script.js?v=18"></script>
+<script src="script.js?v=19"></script>
 </body>
 </html>

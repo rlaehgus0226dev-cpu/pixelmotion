@@ -2823,109 +2823,388 @@ window.addEventListener("keydown", (e) => {
 
 $("btn-shortcuts")?.addEventListener("click", () => showShortcutsModal());
 
-// ===== 수채화 변환 =====
-function renderWatercolor(src, opts) {
-  const scale = Math.max(1, opts.scale || 8);
-  const blur = Math.max(0, opts.blur || 0);
-  const noise = Math.max(0, opts.noise || 0);
-  const bleed = Math.max(0, opts.bleed || 0);
+// ===== 스타일 변환 (수채화/유화/연필/잉크/소프트) =====
+
+// Sobel edge magnitude
+function computeEdges(imgData) {
+  const W = imgData.width, H = imgData.height;
+  const data = imgData.data;
+  const gray = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    gray[i] = 0.299 * data[i*4] + 0.587 * data[i*4+1] + 0.114 * data[i*4+2];
+  }
+  const edges = new Float32Array(W * H);
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      const gx = -gray[i-W-1] + gray[i-W+1]
+               - 2*gray[i-1] + 2*gray[i+1]
+               - gray[i+W-1] + gray[i+W+1];
+      const gy = -gray[i-W-1] - 2*gray[i-W] - gray[i-W+1]
+               + gray[i+W-1] + 2*gray[i+W] + gray[i+W+1];
+      edges[i] = Math.sqrt(gx*gx + gy*gy);
+    }
+  }
+  return edges;
+}
+
+// 종이 결 (저주파 + 고주파 노이즈 혼합)
+function generatePaperTexture(W, H, coarseSize = 32) {
+  const tex = new Float32Array(W * H);
+  const cw = Math.ceil(W / coarseSize) + 2;
+  const ch = Math.ceil(H / coarseSize) + 2;
+  const coarse = new Float32Array(cw * ch);
+  for (let i = 0; i < coarse.length; i++) coarse[i] = Math.random();
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const fx = x / coarseSize, fy = y / coarseSize;
+      const x0 = Math.floor(fx), y0 = Math.floor(fy);
+      const tx = fx - x0, ty = fy - y0;
+      const v00 = coarse[y0 * cw + x0];
+      const v10 = coarse[y0 * cw + x0 + 1];
+      const v01 = coarse[(y0+1) * cw + x0];
+      const v11 = coarse[(y0+1) * cw + x0 + 1];
+      const cv = v00*(1-tx)*(1-ty) + v10*tx*(1-ty) + v01*(1-tx)*ty + v11*tx*ty;
+      tex[y*W + x] = cv * 0.6 + Math.random() * 0.4;
+    }
+  }
+  return tex;
+}
+
+function upscaleBilinear(src, scale) {
   const W = src.width, H = src.height;
-  const newW = Math.round(W * scale);
-  const newH = Math.round(H * scale);
-
-  const srcCanvas = document.createElement("canvas");
-  srcCanvas.width = W; srcCanvas.height = H;
-  srcCanvas.getContext("2d").putImageData(src, 0, 0);
-
-  // 1) bilinear 업스케일
-  const up = document.createElement("canvas");
-  up.width = newW; up.height = newH;
-  const uctx = up.getContext("2d");
-  uctx.imageSmoothingEnabled = true;
-  uctx.imageSmoothingQuality = "high";
-  uctx.drawImage(srcCanvas, 0, 0, newW, newH);
-
-  // 2) 블러
+  const newW = Math.round(W * scale), newH = Math.round(H * scale);
+  const sc = document.createElement("canvas");
+  sc.width = W; sc.height = H;
+  sc.getContext("2d").putImageData(src, 0, 0);
   const out = document.createElement("canvas");
   out.width = newW; out.height = newH;
-  const octx = out.getContext("2d");
-  octx.filter = blur > 0 ? `blur(${blur}px)` : "none";
-  octx.drawImage(up, 0, 0);
-  octx.filter = "none";
+  const oc = out.getContext("2d");
+  oc.imageSmoothingEnabled = true;
+  oc.imageSmoothingQuality = "high";
+  oc.drawImage(sc, 0, 0, newW, newH);
+  return out;
+}
 
-  // 3) 색 번짐 (저채도 오버블러를 살짝 곱셈 합성)
-  if (bleed > 0) {
-    octx.save();
-    octx.filter = `blur(${bleed * 1.5}px) saturate(120%)`;
-    octx.globalAlpha = 0.45;
-    octx.drawImage(up, 0, 0);
-    octx.filter = "none";
-    octx.globalAlpha = 1;
-    octx.restore();
+// === 수채화 (정통) — edge bleed + 종이 결 + 톤 압축 + 색 번짐
+function renderWatercolor(src, opts) {
+  const scale = opts.scale || 8;
+  const blur = opts.blur || 2;
+  const edge = opts.edge || 1.5;
+  const paper = opts.paper || 0.4;
+  const up = upscaleBilinear(src, scale);
+  const newW = up.width, newH = up.height;
+
+  // 부드러운 베이스 + 색 번짐 (saturate 살짝)
+  const base = document.createElement("canvas");
+  base.width = newW; base.height = newH;
+  const bc = base.getContext("2d");
+  bc.filter = blur > 0 ? `blur(${blur}px) saturate(115%)` : "saturate(115%)";
+  bc.drawImage(up, 0, 0);
+  bc.filter = "none";
+  // 색 번짐 추가 합성
+  bc.globalAlpha = 0.35;
+  bc.filter = `blur(${blur * 2 + 1}px) saturate(130%)`;
+  bc.drawImage(up, 0, 0);
+  bc.filter = "none"; bc.globalAlpha = 1;
+
+  const result = bc.getImageData(0, 0, newW, newH);
+  const data = result.data;
+
+  // edge bleed — Sobel 엣지에 곱셈 곱셈 곱셈으로 어둡게
+  if (edge > 0) {
+    const edges = computeEdges(result);
+    for (let i = 0; i < newW * newH; i++) {
+      if (data[i*4+3] === 0) continue;
+      const e = Math.min(1, edges[i] / 100);
+      if (e > 0.08) {
+        const k = 1 - e * edge * 0.18;
+        data[i*4]   = data[i*4] * k;
+        data[i*4+1] = data[i*4+1] * k;
+        data[i*4+2] = data[i*4+2] * k;
+      }
+    }
   }
 
-  const result = octx.getImageData(0, 0, newW, newH);
+  // 종이 결
+  if (paper > 0) {
+    const tex = generatePaperTexture(newW, newH, 28);
+    for (let i = 0; i < newW * newH; i++) {
+      if (data[i*4+3] === 0) continue;
+      const t = (tex[i] - 0.5) * paper * 0.5;
+      const k = 1 + t;
+      data[i*4]   = Math.max(0, Math.min(255, data[i*4] * k));
+      data[i*4+1] = Math.max(0, Math.min(255, data[i*4+1] * k));
+      data[i*4+2] = Math.max(0, Math.min(255, data[i*4+2] * k));
+    }
+  }
 
-  // 4) 픽셀별 노이즈
-  if (noise > 0) {
-    const data = result.data;
-    for (let i = 0; i < data.length; i += 4) {
-      if (data[i + 3] === 0) continue;
-      const n = (Math.random() - 0.5) * noise * 2;
-      data[i]     = Math.max(0, Math.min(255, data[i] + n));
-      data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + n));
-      data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + n));
+  // 톤 압축 (수채화는 순흑·순백 안 씀)
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i+3] === 0) continue;
+    data[i]   = 14 + (data[i] / 255) * 226;
+    data[i+1] = 14 + (data[i+1] / 255) * 226;
+    data[i+2] = 14 + (data[i+2] / 255) * 226;
+  }
+  return result;
+}
+
+// === 유화 — 큰 붓터치 + 진한 색
+function renderOil(src, opts) {
+  const scale = opts.scale || 8;
+  const blur = opts.blur || 1.5;
+  const sat = opts.sat || 1.3;
+  const brush = Math.max(2, Math.round(opts.brush || 5));
+  const up = upscaleBilinear(src, scale);
+  const newW = up.width, newH = up.height;
+
+  const out = document.createElement("canvas");
+  out.width = newW; out.height = newH;
+  const oc = out.getContext("2d");
+  oc.filter = `blur(${blur}px) saturate(${sat * 100}%)`;
+  oc.drawImage(up, 0, 0);
+  oc.filter = "none";
+
+  const result = oc.getImageData(0, 0, newW, newH);
+  const data = result.data;
+
+  // 붓터치 — brush×brush 셀마다 한 방향 노이즈 + 인접 평균
+  for (let y = 0; y < newH; y += brush) {
+    for (let x = 0; x < newW; x += brush) {
+      const offset = (Math.random() - 0.5) * 28;
+      for (let dy = 0; dy < brush && y+dy < newH; dy++) {
+        for (let dx = 0; dx < brush && x+dx < newW; dx++) {
+          const i = ((y+dy) * newW + (x+dx)) * 4;
+          if (data[i+3] === 0) continue;
+          data[i]   = Math.max(0, Math.min(255, data[i] + offset));
+          data[i+1] = Math.max(0, Math.min(255, data[i+1] + offset));
+          data[i+2] = Math.max(0, Math.min(255, data[i+2] + offset));
+        }
+      }
     }
   }
   return result;
 }
+
+// === 연필 스케치
+function renderPencil(src, opts) {
+  const scale = opts.scale || 8;
+  const edge = opts.edge || 2;
+  const paper = opts.paper || 0.5;
+  const contrast = opts.contrast || 1.2;
+  const up = upscaleBilinear(src, scale);
+  const newW = up.width, newH = up.height;
+
+  const gc = document.createElement("canvas");
+  gc.width = newW; gc.height = newH;
+  const gctx = gc.getContext("2d");
+  gctx.filter = `grayscale(100%) contrast(${contrast * 100}%)`;
+  gctx.drawImage(up, 0, 0);
+  gctx.filter = "none";
+
+  const result = gctx.getImageData(0, 0, newW, newH);
+  const data = result.data;
+  const edges = computeEdges(result);
+  const paperColor = 245;
+
+  for (let i = 0; i < newW * newH; i++) {
+    if (data[i*4+3] === 0) {
+      data[i*4]   = paperColor;
+      data[i*4+1] = paperColor - 5;
+      data[i*4+2] = paperColor - 12;
+      data[i*4+3] = 255;
+      continue;
+    }
+    const gray = data[i*4];
+    const e = Math.min(1, edges[i] / 70);
+    const shading = Math.min(1, (1 - gray/255) * 0.65 + e * 0.5 * edge);
+    const final = Math.round(paperColor - shading * paperColor);
+    data[i*4]   = final;
+    data[i*4+1] = final;
+    data[i*4+2] = final;
+    data[i*4+3] = 255;
+  }
+
+  if (paper > 0) {
+    const tex = generatePaperTexture(newW, newH, 24);
+    for (let i = 0; i < newW * newH; i++) {
+      const t = (tex[i] - 0.5) * paper * 50;
+      data[i*4]   = Math.max(0, Math.min(255, data[i*4] + t));
+      data[i*4+1] = Math.max(0, Math.min(255, data[i*4+1] + t));
+      data[i*4+2] = Math.max(0, Math.min(255, data[i*4+2] + t));
+    }
+  }
+  return result;
+}
+
+// === 잉크 — 깔끔한 색 채움 + 검은 라인
+function renderInk(src, opts) {
+  const scale = opts.scale || 8;
+  const blur = opts.blur || 1;
+  const edge = opts.edge || 1.8;
+  const threshold = opts.threshold || 35;
+  const up = upscaleBilinear(src, scale);
+  const newW = up.width, newH = up.height;
+
+  const out = document.createElement("canvas");
+  out.width = newW; out.height = newH;
+  const oc = out.getContext("2d");
+  oc.filter = `blur(${blur}px) saturate(115%)`;
+  oc.drawImage(up, 0, 0);
+  oc.filter = "none";
+
+  const result = oc.getImageData(0, 0, newW, newH);
+  const data = result.data;
+  const edges = computeEdges(result);
+
+  for (let i = 0; i < newW * newH; i++) {
+    if (data[i*4+3] === 0) continue;
+    if (edges[i] > threshold) {
+      const ink = Math.min(1, (edges[i] - threshold) / 80) * edge;
+      const k = Math.max(0, 1 - ink);
+      data[i*4]   = Math.round(data[i*4] * k);
+      data[i*4+1] = Math.round(data[i*4+1] * k);
+      data[i*4+2] = Math.round(data[i*4+2] * k);
+    }
+  }
+  return result;
+}
+
+// === 소프트 (기존)
+function renderSoft(src, opts) {
+  const scale = opts.scale || 8;
+  const blur = opts.blur || 3;
+  const noise = opts.noise || 10;
+  const bleed = opts.bleed || 2;
+  const up = upscaleBilinear(src, scale);
+  const newW = up.width, newH = up.height;
+
+  const out = document.createElement("canvas");
+  out.width = newW; out.height = newH;
+  const oc = out.getContext("2d");
+  oc.filter = blur > 0 ? `blur(${blur}px)` : "none";
+  oc.drawImage(up, 0, 0);
+  oc.filter = "none";
+  if (bleed > 0) {
+    oc.save();
+    oc.filter = `blur(${bleed * 1.5}px) saturate(120%)`;
+    oc.globalAlpha = 0.45;
+    oc.drawImage(up, 0, 0);
+    oc.filter = "none"; oc.globalAlpha = 1;
+    oc.restore();
+  }
+  const result = oc.getImageData(0, 0, newW, newH);
+  const data = result.data;
+  if (noise > 0) {
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i+3] === 0) continue;
+      const n = (Math.random() - 0.5) * noise * 2;
+      data[i]   = Math.max(0, Math.min(255, data[i] + n));
+      data[i+1] = Math.max(0, Math.min(255, data[i+1] + n));
+      data[i+2] = Math.max(0, Math.min(255, data[i+2] + n));
+    }
+  }
+  return result;
+}
+
+// 스타일 프리셋 정의
+const STYLE_PRESETS = {
+  watercolor: {
+    label: "🎨 수채화 (정통)",
+    desc: "엣지 진해짐 + 종이 결 + 톤 압축 + 색 번짐",
+    sliders: [
+      { id: "scale", label: "사이즈", min: 2, max: 16, step: 1, def: 8, fmt: v => `×${v}` },
+      { id: "blur",  label: "물감 번짐", min: 0, max: 6, step: 0.5, def: 2 },
+      { id: "edge",  label: "가장자리 진해짐", min: 0, max: 3, step: 0.1, def: 1.5 },
+      { id: "paper", label: "종이 결", min: 0, max: 1, step: 0.05, def: 0.4 },
+    ],
+    render: renderWatercolor,
+  },
+  oil: {
+    label: "🖌 유화",
+    desc: "큰 붓터치 + 진한 채도",
+    sliders: [
+      { id: "scale", label: "사이즈", min: 2, max: 16, step: 1, def: 8, fmt: v => `×${v}` },
+      { id: "blur",  label: "부드러움", min: 0, max: 4, step: 0.5, def: 1.5 },
+      { id: "sat",   label: "채도", min: 1, max: 2, step: 0.05, def: 1.3 },
+      { id: "brush", label: "붓 크기 (px)", min: 2, max: 12, step: 1, def: 5 },
+    ],
+    render: renderOil,
+  },
+  pencil: {
+    label: "✏ 연필 스케치",
+    desc: "회색조 + 엣지 강조 + 종이 결",
+    sliders: [
+      { id: "scale",    label: "사이즈", min: 2, max: 16, step: 1, def: 8, fmt: v => `×${v}` },
+      { id: "edge",     label: "엣지 강조", min: 0, max: 4, step: 0.1, def: 2 },
+      { id: "contrast", label: "대비", min: 0.8, max: 2, step: 0.05, def: 1.2 },
+      { id: "paper",    label: "종이 결", min: 0, max: 1.5, step: 0.05, def: 0.5 },
+    ],
+    render: renderPencil,
+  },
+  ink: {
+    label: "🖋 잉크",
+    desc: "깔끔 색 채움 + 검은 라인",
+    sliders: [
+      { id: "scale",     label: "사이즈", min: 2, max: 16, step: 1, def: 8, fmt: v => `×${v}` },
+      { id: "blur",      label: "색 부드러움", min: 0, max: 3, step: 0.25, def: 1 },
+      { id: "edge",      label: "라인 진하기", min: 0, max: 3, step: 0.1, def: 1.8 },
+      { id: "threshold", label: "라인 임계치", min: 10, max: 80, step: 5, def: 35 },
+    ],
+    render: renderInk,
+  },
+  soft: {
+    label: "💨 소프트 블러",
+    desc: "단순 흐림 + 노이즈",
+    sliders: [
+      { id: "scale", label: "사이즈", min: 2, max: 16, step: 1, def: 8, fmt: v => `×${v}` },
+      { id: "blur",  label: "부드러움", min: 0, max: 10, step: 0.5, def: 3 },
+      { id: "bleed", label: "색 번짐", min: 0, max: 8, step: 0.5, def: 2 },
+      { id: "noise", label: "노이즈", min: 0, max: 40, step: 1, def: 10 },
+    ],
+    render: renderSoft,
+  },
+};
 
 $("btn-watercolor")?.addEventListener("click", () => {
   const f = state.frames[state.frameIdx];
   if (!f || !f.source) { setStatus("프레임이 없습니다", "error"); return; }
   const W = f.source.width, H = f.source.height;
 
-  showModal("🎨 수채화 변환", `
+  let curStyle = "watercolor";
+  let lastFullOpts = null;
+  let renderTimer = null;
+
+  const styleOpts = Object.entries(STYLE_PRESETS).map(([k, p]) => `<option value="${k}"${k===curStyle?' selected':''}>${p.label}</option>`).join("");
+
+  showModal("🎨 스타일 변환", `
+    <div class="modal-row" style="margin-bottom:12px;">
+      <label>스타일 <select id="sty-select" style="min-width:200px;">${styleOpts}</select></label>
+      <span id="sty-desc" class="modal-info" style="margin:0;"></span>
+    </div>
     <div style="display:flex; gap:14px; margin-bottom:12px;">
       <div style="flex:1;">
         <div style="font-size:11px; color:#888; margin-bottom:4px;">원본 (도트)</div>
         <div style="background:#1a1a1a; border:1px solid #333; padding:6px; display:flex; justify-content:center; align-items:center; min-height:240px; border-radius:4px;">
-          <canvas id="wc-source-preview" style="image-rendering:pixelated; image-rendering:crisp-edges; max-width:100%; max-height:240px; background:transparent;"></canvas>
+          <canvas id="sty-source-preview" style="image-rendering:pixelated; image-rendering:crisp-edges; max-width:100%; max-height:240px; background:transparent;"></canvas>
         </div>
       </div>
       <div style="flex:1;">
-        <div style="font-size:11px; color:#888; margin-bottom:4px;">수채화 결과 <span id="wc-result-info" style="color:#666;"></span></div>
+        <div style="font-size:11px; color:#888; margin-bottom:4px;">변환 결과 <span id="sty-result-info" style="color:#666;"></span></div>
         <div style="background:#1a1a1a; border:1px solid #333; padding:6px; display:flex; justify-content:center; align-items:center; min-height:240px; border-radius:4px;">
-          <canvas id="wc-result-preview" style="max-width:100%; max-height:240px; background:transparent;"></canvas>
+          <canvas id="sty-result-preview" style="max-width:100%; max-height:240px; background:transparent;"></canvas>
         </div>
       </div>
     </div>
-    <div style="display:grid; grid-template-columns: auto 1fr 40px; gap:6px 10px; align-items:center; margin-bottom:10px;">
-      <label style="font-size:12px;">업스케일</label>
-      <input type="range" id="wc-scale" value="8" min="2" max="16" step="1" style="width:100%;">
-      <span id="wc-scale-val" style="font-family:Consolas,monospace; font-size:11px; color:#4a8;">×8</span>
-
-      <label style="font-size:12px;">부드러움</label>
-      <input type="range" id="wc-blur" value="3" min="0" max="10" step="0.5" style="width:100%;">
-      <span id="wc-blur-val" style="font-family:Consolas,monospace; font-size:11px; color:#4a8;">3</span>
-
-      <label style="font-size:12px;">색 번짐</label>
-      <input type="range" id="wc-bleed" value="2" min="0" max="8" step="0.5" style="width:100%;">
-      <span id="wc-bleed-val" style="font-family:Consolas,monospace; font-size:11px; color:#4a8;">2</span>
-
-      <label style="font-size:12px;">노이즈</label>
-      <input type="range" id="wc-noise" value="10" min="0" max="40" step="1" style="width:100%;">
-      <span id="wc-noise-val" style="font-family:Consolas,monospace; font-size:11px; color:#4a8;">10</span>
-    </div>
-    <div class="modal-info" style="font-size:11px;">파라미터 조절 시 우측 미리보기 자동 갱신. [PNG 저장]은 위 업스케일 그대로, [현재 프레임에 적용]은 source 교체 (Ctrl+Z).</div>
+    <div id="sty-sliders" style="display:grid; grid-template-columns: auto 1fr 50px; gap:6px 10px; align-items:center; margin-bottom:10px;"></div>
+    <div class="modal-info" style="font-size:11px;">슬라이더 조절 시 우측 미리보기 자동 갱신 (가벼운 사이즈). [PNG 저장]은 슬라이더 사이즈로 풀 렌더, [적용]은 source 교체 (Ctrl+Z).</div>
     <div class="modal-row" style="justify-content:flex-end;">
-      <button id="wc-apply">현재 프레임에 적용</button>
-      <button id="wc-save" class="primary">PNG 저장</button>
+      <button id="sty-apply">현재 프레임에 적용</button>
+      <button id="sty-save" class="primary">PNG 저장</button>
     </div>
   `);
 
-  // 원본 미리보기
-  const srcPv = $("wc-source-preview");
+  const srcPv = $("sty-source-preview");
   const srcDisp = Math.min(240, Math.max(W, H) * 4);
   const ratio = srcDisp / Math.max(W, H);
   srcPv.width = Math.round(W * ratio);
@@ -2934,60 +3213,93 @@ $("btn-watercolor")?.addEventListener("click", () => {
   sctx.imageSmoothingEnabled = false;
   sctx.drawImage(imageDataToCanvas2(f.source), 0, 0, srcPv.width, srcPv.height);
 
-  let lastFullResult = null;
-  let renderTimer = null;
+  function rebuildSliders() {
+    const preset = STYLE_PRESETS[curStyle];
+    $("sty-desc").textContent = preset.desc;
+    const cont = $("sty-sliders");
+    cont.innerHTML = "";
+    preset.sliders.forEach(s => {
+      const label = document.createElement("label");
+      label.style.fontSize = "12px";
+      label.textContent = s.label;
+      const input = document.createElement("input");
+      input.type = "range";
+      input.id = `sty-${s.id}`;
+      input.min = s.min; input.max = s.max; input.step = s.step;
+      input.value = s.def;
+      input.style.width = "100%";
+      const val = document.createElement("span");
+      val.id = `sty-${s.id}-val`;
+      val.style.cssText = "font-family:Consolas,monospace; font-size:11px; color:#4a8; text-align:right;";
+      val.textContent = s.fmt ? s.fmt(s.def) : String(s.def);
+      cont.appendChild(label);
+      cont.appendChild(input);
+      cont.appendChild(val);
+      input.addEventListener("input", () => {
+        val.textContent = s.fmt ? s.fmt(parseFloat(input.value)) : input.value;
+        debounceUpdate();
+      });
+    });
+  }
+
+  function gatherOpts() {
+    const preset = STYLE_PRESETS[curStyle];
+    const opts = {};
+    preset.sliders.forEach(s => {
+      const inp = $(`sty-${s.id}`);
+      opts[s.id] = parseFloat(inp.value);
+    });
+    return opts;
+  }
 
   function updateResult() {
-    const scale = parseInt($("wc-scale").value, 10);
-    const blur = parseFloat($("wc-blur").value);
-    const noise = parseFloat($("wc-noise").value);
-    const bleed = parseFloat($("wc-bleed").value);
-    $("wc-scale-val").textContent = `×${scale}`;
-    $("wc-blur-val").textContent = blur.toString();
-    $("wc-noise-val").textContent = noise.toString();
-    $("wc-bleed-val").textContent = bleed.toString();
-
-    // 미리보기는 가벼운 사이즈로 (max 256)
-    const pvScale = Math.max(2, Math.min(scale, Math.floor(256 / Math.max(W, H))));
-    const result = renderWatercolor(f.source, { scale: pvScale, blur, noise, bleed });
-    lastFullResult = { scale, blur, noise, bleed };
-
-    const rc = $("wc-result-preview");
+    const preset = STYLE_PRESETS[curStyle];
+    const opts = gatherOpts();
+    // 미리보기는 가벼운 사이즈 (max 256)
+    const pvScale = Math.max(2, Math.min(opts.scale, Math.floor(256 / Math.max(W, H))));
+    const pvOpts = { ...opts, scale: pvScale };
+    const result = preset.render(f.source, pvOpts);
+    lastFullOpts = opts;
+    const rc = $("sty-result-preview");
     rc.width = result.width; rc.height = result.height;
     rc.getContext("2d").putImageData(result, 0, 0);
-    $("wc-result-info").textContent = `미리보기 ${result.width}×${result.height} / 저장 시 ${W*scale}×${H*scale}`;
+    $("sty-result-info").textContent = `미리보기 ${result.width}×${result.height} / 저장 시 ${W*opts.scale}×${H*opts.scale}`;
   }
 
   function debounceUpdate() {
     if (renderTimer) clearTimeout(renderTimer);
-    renderTimer = setTimeout(updateResult, 80);
+    renderTimer = setTimeout(updateResult, 100);
   }
 
-  ["wc-scale","wc-blur","wc-noise","wc-bleed"].forEach(id => {
-    $(id).addEventListener("input", debounceUpdate);
+  $("sty-select").addEventListener("change", (e) => {
+    curStyle = e.target.value;
+    rebuildSliders();
+    updateResult();
   });
 
-  $("wc-save").addEventListener("click", () => {
-    if (!lastFullResult) return;
-    const o = lastFullResult;
-    setStatus(`수채화 렌더링 중... (${W*o.scale}×${H*o.scale})`, "processing");
+  $("sty-save").addEventListener("click", () => {
+    if (!lastFullOpts) return;
+    const preset = STYLE_PRESETS[curStyle];
+    const o = lastFullOpts;
+    setStatus(`렌더링 중... (${W*o.scale}×${H*o.scale})`, "processing");
     setTimeout(() => {
-      const full = renderWatercolor(f.source, o);
+      const full = preset.render(f.source, o);
       const c = freshCanvas(full);
       c.toBlob((blob) => {
         const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
-        const base = stripExt(f.fileName) || "watercolor";
-        downloadBlob(blob, `${base}_watercolor_${full.width}x${full.height}_${ts}.png`);
+        const base = stripExt(f.fileName) || "frame";
+        downloadBlob(blob, `${base}_${curStyle}_${full.width}x${full.height}_${ts}.png`);
         setStatus(`저장 완료: ${full.width}×${full.height}`, "success");
       });
     }, 30);
   });
 
-  $("wc-apply").addEventListener("click", () => {
-    if (!lastFullResult) return;
-    if (!confirm("현재 프레임의 source를 수채화 결과로 교체합니다 (Ctrl+Z로 되돌리기). 진행?")) return;
+  $("sty-apply").addEventListener("click", () => {
+    if (!lastFullOpts) return;
+    if (!confirm(`현재 프레임의 source를 ${STYLE_PRESETS[curStyle].label} 결과로 교체합니다 (Ctrl+Z로 되돌리기). 진행?`)) return;
     snapshot();
-    const full = renderWatercolor(f.source, lastFullResult);
+    const preset = STYLE_PRESETS[curStyle];
+    const full = preset.render(f.source, lastFullOpts);
     f.source = full;
     f.pixelized = false;
     invalidateSourceCache();
@@ -2995,9 +3307,10 @@ $("btn-watercolor")?.addEventListener("click", () => {
     renderTimeline();
     redraw();
     hideModal();
-    setStatus("수채화 변환 적용", "success");
+    setStatus(`${preset.label} 적용`, "success");
   });
 
+  rebuildSliders();
   updateResult();
 });
 
