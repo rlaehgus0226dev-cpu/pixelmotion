@@ -9,149 +9,49 @@
 </head>
 <body>
 
+<!-- TOPBAR (slim) -->
 <div id="topbar">
-  <div class="topbar-group">
-    <label class="button" for="file-input">+ 이미지 추가</label>
-    <input id="file-input" type="file" accept="image/*" multiple>
-    <button id="btn-save-menu">저장 ▾</button>
-    <span class="help-icon" data-help="이미지 추가 — PNG/JPG/BMP/GIF/WEBP 여러 장 선택 가능. 선택한 모든 파일이 프레임으로 추가됨
-
-저장 — 다음 4가지 출력 중 선택
-  • 현재 프레임 PNG
-  • 모든 프레임 ZIP
-  • 스프라이트 시트 (그리드)
-  • GIF 애니메이션">?</span>
-  </div>
-
+  <label class="button" for="file-input">+ 이미지</label>
+  <input id="file-input" type="file" accept="image/*" multiple>
+  <button id="btn-save-menu">저장 ▾</button>
+  <button id="btn-undo" disabled title="되돌리기 (Ctrl+Z)">↶</button>
   <div class="topbar-divider"></div>
-
-  <div class="topbar-group">
-    <button id="btn-bg">배경 제거</button>
-    <label class="checkbox"><input type="checkbox" id="bg-precise">정밀</label>
-    <button id="btn-undo" disabled>↶ 되돌리기</button>
-    <span class="help-icon" data-help="배경 제거 — AI(rembg)로 자동 배경 제거. 첫 호출 시 모델 ~170MB 다운로드
-
-정밀 — isnet 모델 + alpha matting. 가장자리 더 깔끔, 더 느림. 첫 호출 시 ~170MB 추가 다운로드
-
-되돌리기 (Ctrl+Z) — 직전 변환(배경 제거 / 도트화 첫 진입) 취소
-
-자동 배경 제거는 본질적 한계가 큼. 결과 부족하면 Photopea 같은 외부 툴에서 누끼 후 PNG로 import 권장">?</span>
-  </div>
-
-  <span style="color:#888; font-size:12px;">참조</span>
-  <select id="ref-frame-header" title="우측에 표시할 프레임 (비어있음 = 단일 뷰)">
-    <option value="-1">비어있음</option>
-  </select>
-  <button id="btn-shortcuts" title="단축키 안내 (F1)">⌨ 단축키</button>
+  <label class="topbar-label">격자
+    <select id="grid-select">
+      <option value="8">8</option>
+      <option value="16">16</option>
+      <option value="32">32</option>
+      <option value="48">48</option>
+      <option value="64" selected>64</option>
+      <option value="128">128</option>
+      <option value="256">256</option>
+    </select>
+  </label>
+  <label class="topbar-label">세분
+    <select id="sub-select">
+      <option value="1" selected>1×1</option>
+      <option value="2">2×2</option>
+      <option value="3">3×3</option>
+      <option value="4">4×4</option>
+    </select>
+  </label>
+  <label class="checkbox"><input type="checkbox" id="show-grid" checked>격자</label>
+  <label class="checkbox"><input type="checkbox" id="show-subgrid" checked>세분 라인</label>
+  <button id="btn-shortcuts" title="단축키 (F1)">⌨ 단축키</button>
   <div id="file-info"></div>
 </div>
 
 <div class="body-wrap">
 
-  <button id="btn-toggle" title="사이드바 접기/펼치기">◀</button>
-
-  <div id="sidebar">
-
-    <div class="group">
-      <div class="group-header">
-        <span class="group-title">격자</span>
-        <span class="help-icon" data-help="사이즈 — 짧은 변의 도트 수. 64면 짧은 변이 64도트, 긴 변은 비율대로 자동
-
-세분화 — 큰 격자 1셀을 N×N 도트로 잘게 분할. 작은 디테일(머리카락 등)이 살아남음. 예) 64 + 4×4 = 짧은 변 256도트
-
-격자 표시 — 격자 라인 ON/OFF
-
-세분화 라인 — 세분화 모드의 도트 단위 라인만 토글. 도트 결과는 그대로 유지">?</span>
-      </div>
-      <div class="row-stack">
-        <span class="row-stack-label">사이즈</span>
-        <div class="radio-group">
-          <input type="radio" name="grid" id="g48" value="48"><label for="g48">48</label>
-          <input type="radio" name="grid" id="g64" value="64" checked><label for="g64">64</label>
-          <input type="radio" name="grid" id="g128" value="128"><label for="g128">128</label>
-          <input type="radio" name="grid" id="g256" value="256"><label for="g256">256</label>
-        </div>
-      </div>
-      <div class="row-stack">
-        <span class="row-stack-label">세분화</span>
-        <div class="radio-group">
-          <input type="radio" name="sub" id="sub1" value="1" checked><label for="sub1">1×1</label>
-          <input type="radio" name="sub" id="sub2" value="2"><label for="sub2">2×2</label>
-          <input type="radio" name="sub" id="sub3" value="3"><label for="sub3">3×3</label>
-          <input type="radio" name="sub" id="sub4" value="4"><label for="sub4">4×4</label>
-        </div>
-      </div>
-      <div class="row">
-        <label class="checkbox"><input type="checkbox" id="show-grid" checked>격자 표시</label>
-        <label class="checkbox"><input type="checkbox" id="show-subgrid" checked>세분화 라인</label>
-      </div>
-    </div>
-
-    <div class="group">
-      <div class="group-header">
-        <span class="group-title">도트화</span>
-        <span class="help-icon" data-help="모드 — 다운샘플 알고리즘
-  • 평균: 셀 픽셀 평균. 디테일 살지만 흐릿
-  • 우세: 다수 색군. 또렷하나 작은 디테일 묻힘
-  • 디테일: 채도 가중 우세. 채도 있는 작은 디테일 보존
-
-색 — 팔레트 색 수 제한 (Median Cut). 적을수록 강한 도트 룩
-
-채도 — 다운샘플 후 채도 부스트 (luminance preserving)
-
-아웃라인 — 캐릭터 외곽 처리
-  • 도트: 외곽 1픽셀(sub-pixel)을 검정으로 변경
-  • 격자: 외곽 큰 격자 셀(N 단위)을 sub×sub 블록 단일 색으로 평탄화. 외곽은 큰 도트, 내부는 세분 도트 그대로 — 외곽이 깔끔하게 큰 격자 단위, 내부 디테일은 보존
-
-도트화 실행 — 위 설정으로 처리. 도트화 후 옵션 변경 시 자동 재적용">?</span>
-      </div>
-      <div class="row-stack">
-        <span class="row-stack-label">모드</span>
-        <div class="radio-group">
-          <input type="radio" name="ds" id="ds-avg" value="avg"><label for="ds-avg">평균</label>
-          <input type="radio" name="ds" id="ds-dom" value="dom" checked><label for="ds-dom">우세</label>
-          <input type="radio" name="ds" id="ds-det" value="det"><label for="ds-det">디테일</label>
-        </div>
-      </div>
-      <div class="row-stack">
-        <span class="row-stack-label">색</span>
-        <div class="radio-group">
-          <input type="radio" name="color" id="c0" value="0" checked><label for="c0">원본</label>
-          <input type="radio" name="color" id="c8" value="8"><label for="c8">8</label>
-          <input type="radio" name="color" id="c16" value="16"><label for="c16">16</label>
-          <input type="radio" name="color" id="c32" value="32"><label for="c32">32</label>
-          <input type="radio" name="color" id="c64" value="64"><label for="c64">64</label>
-        </div>
-      </div>
-      <div class="row-stack">
-        <span class="row-stack-label">채도</span>
-        <div class="radio-group">
-          <input type="radio" name="sat" id="s100" value="100" checked><label for="s100">기본</label>
-          <input type="radio" name="sat" id="s130" value="130"><label for="s130">+30%</label>
-          <input type="radio" name="sat" id="s160" value="160"><label for="s160">+60%</label>
-          <input type="radio" name="sat" id="s200" value="200"><label for="s200">+100%</label>
-        </div>
-      </div>
-      <div class="row-stack">
-        <span class="row-stack-label">아웃라인</span>
-        <div class="radio-group">
-          <input type="radio" name="outline" id="ol-off" value="off" checked><label for="ol-off">끔</label>
-          <input type="radio" name="outline" id="ol-fine" value="fine"><label for="ol-fine">도트</label>
-          <input type="radio" name="outline" id="ol-coarse" value="coarse"><label for="ol-coarse">격자</label>
-        </div>
-      </div>
-      <div class="row-stack">
-        <span class="row-stack-label">적용 범위</span>
-        <div class="radio-group">
-          <input type="radio" name="apply-range" id="ar-cur" value="current" checked><label for="ar-cur">현재만</label>
-          <input type="radio" name="apply-range" id="ar-all" value="all"><label for="ar-all">모든 프레임</label>
-        </div>
-      </div>
-      <div class="row">
-        <button id="btn-pixelize" class="primary" style="width:100%;">도트화 실행</button>
-      </div>
-    </div>
-
+  <!-- LEFT VERTICAL TOOL PALETTE -->
+  <div id="toolbar-left">
+    <button class="tool-btn" data-tool="select" title="선택 — 사각형/올가미 (M/L)"><span class="tk">S</span></button>
+    <div class="tool-divider"></div>
+    <button class="tool-btn" data-tool="brush" title="브러시 (B)"><span class="tk">B</span></button>
+    <button class="tool-btn" data-tool="erase" title="지우개 (E)"><span class="tk">E</span></button>
+    <button class="tool-btn" data-tool="pick" title="스포이드 (I)"><span class="tk">I</span></button>
+    <div class="tool-divider"></div>
+    <button class="tool-btn" id="btn-flip-h" title="좌우 반전">↔</button>
   </div>
 
   <div id="main">
@@ -162,7 +62,7 @@
         <div id="toast"></div>
         <div id="empty-state">
           <div class="empty-title">PixelMotion</div>
-          <div class="empty-sub">상단 [+ 이미지 추가]로 시작하세요</div>
+          <div class="empty-sub">빈 캔버스에 도트를 찍거나 [+ 이미지]</div>
           <div class="empty-hint">여러 장 동시 선택 시 프레임으로 자동 추가</div>
         </div>
         <div id="zoom-ctrl">
@@ -178,132 +78,59 @@
         <div id="ref-label">참조 (읽기 전용)</div>
       </div>
     </div>
+
+    <!-- TIMELINE (slim) -->
     <div id="timeline">
       <div id="timeline-controls">
-        <label class="button" for="file-input" title="여러 이미지 선택 시 모두 프레임으로 추가">+ 프레임</label>
+        <div class="tl-mode-group">
+          <button id="mode-anim" class="mode-btn active" title="활성 프레임 1장만 표시 / 재생">🎬 애니메이션</button>
+          <button id="mode-layer" class="mode-btn" title="표시(👁) ON 모든 프레임을 겹쳐서 보기">🍰 레이어</button>
+        </div>
+        <div class="topbar-divider"></div>
+        <button id="tl-prev" title="이전">◀</button>
+        <button id="tl-next" title="다음">▶</button>
+        <button id="tl-play" title="재생">▶ 재생</button>
+        <button id="tl-stop" title="정지" disabled>⏸</button>
+        <label class="topbar-label">FPS <input type="number" id="tl-fps" value="12" min="1" max="60" style="width:42px;"></label>
+        <div class="topbar-divider"></div>
+        <label class="topbar-label">어니언
+          <select id="onion-range">
+            <option value="0" selected>끔</option>
+            <option value="1">±1</option>
+            <option value="3">±3</option>
+            <option value="all">모두</option>
+          </select>
+        </label>
+        <label class="checkbox"><input type="checkbox" id="onion-tint">색 틴트</label>
+        <div class="topbar-divider"></div>
+        <button id="btn-layer-add" title="현재 사이즈로 빈 프레임 추가">+ 빈 프레임</button>
+        <button id="tl-add" title="이미지 파일 추가 → 새 프레임">+ 이미지</button>
         <button id="tl-remove" title="현재 프레임 삭제">삭제</button>
         <div class="topbar-divider"></div>
-        <button id="tl-prev" title="이전 프레임">◀ 이전</button>
-        <button id="tl-next" title="다음 프레임">다음 ▶</button>
+        <button id="btn-layers-all-show" title="모든 프레임 표시">👁 전체</button>
+        <button id="btn-layers-all-hide" title="모든 프레임 숨김">🚫 전체</button>
         <div class="topbar-divider"></div>
-        <button id="tl-play" title="재생">▶ 재생</button>
-        <button id="tl-stop" title="정지" disabled>⏸ 정지</button>
-        <label>FPS <input type="number" id="tl-fps" value="12" min="1" max="60"></label>
-        <label class="checkbox"><input type="checkbox" id="tl-onion">어니언 스킨</label>
+        <label class="topbar-label">참조
+          <select id="ref-frame-header" title="우측에 표시할 프레임 (비어있음 = 단일 뷰)">
+            <option value="-1">없음</option>
+          </select>
+        </label>
         <span id="tl-info" class="modal-info" style="margin-left:auto;">프레임 0개</span>
       </div>
       <div id="timeline-frames"></div>
     </div>
-    <div id="status">이미지를 열어주세요</div>
+
+    <div id="status"></div>
   </div>
 
   <button id="btn-toggle-right" title="우측 패널 접기/펼치기">▶</button>
 
+  <!-- RIGHT ACCORDION PANEL -->
   <div id="rightpanel">
-    <div class="group">
-      <div class="group-header">
-        <span class="group-title">디자인 수정</span>
-        <span class="help-icon" data-help="도트화 결과를 직접 보정하는 도구입니다.
 
-선택 도구
-  • 없음: 마우스로 영역 선택 안 함
-  • 사각형: 캔버스에서 드래그해 직사각형 영역 선택
-  • 올가미: 자유 드래그로 영역 선택. 떼면 자동 닫힘
-  • 스포이드/브러시/지우개: 픽셀 편집 도구
-
-빈 격자 색 보정 — 영역 안 비어있는(투명) 도트를 색으로 채움
-  • 평균: 영역 안 평균색 한 가지로 모두 채움
-  • 그라데이션: BFS로 시드 색 → 영역 평균까지 점진 수렴 (단계별 색 변화)
-
-영역 안 도트는 영역과 1픽셀이라도 겹치면 자동 포함 (걸침 동작)">?</span>
-      </div>
-      <div class="row-stack">
-        <span class="row-stack-label">도구</span>
-        <div class="radio-group">
-          <input type="radio" name="tool" id="tool-none" value="none" checked><label for="tool-none">없음</label>
-          <input type="radio" name="tool" id="tool-rect" value="rect"><label for="tool-rect">사각형</label>
-          <input type="radio" name="tool" id="tool-lasso" value="lasso"><label for="tool-lasso">올가미</label>
-        </div>
-        <div class="radio-group" style="margin-top:4px;">
-          <input type="radio" name="tool" id="tool-pick" value="pick"><label for="tool-pick">스포이드</label>
-          <input type="radio" name="tool" id="tool-brush" value="brush"><label for="tool-brush">브러시</label>
-          <input type="radio" name="tool" id="tool-erase" value="erase"><label for="tool-erase">지우개</label>
-        </div>
-      </div>
-      <div class="row-stack">
-        <span class="row-stack-label">브러시 크기</span>
-        <div class="radio-group">
-          <input type="radio" name="brush-size" id="bs-cell" value="cell" checked><label for="bs-cell">큰 격자</label>
-          <input type="radio" name="brush-size" id="bs-1" value="1"><label for="bs-1">1×1</label>
-        </div>
-      </div>
-      <div class="row-stack">
-        <span class="row-stack-label">보정 방식</span>
-        <div class="radio-group">
-          <input type="radio" name="fill-mode" id="fm-avg" value="avg" checked><label for="fm-avg">평균</label>
-          <input type="radio" name="fill-mode" id="fm-grad" value="grad"><label for="fm-grad">그라데이션</label>
-        </div>
-      </div>
-      <div class="row">
-        <button id="btn-clear-sel">선택 해제</button>
-      </div>
-      <div class="row">
-        <button id="btn-fill-area" class="primary" style="width:100%;">빈 격자 색 보정</button>
-      </div>
-      <div class="row" style="border-top:1px solid #3a3a3a; padding-top:8px; margin-top:4px;">
-        <button id="btn-flip-h" style="width:100%;" title="8방향 작업 시 한 방향 결과를 반전해서 반대 방향 생성">↔ 좌우 반전</button>
-      </div>
-    </div>
-
-    <div class="group">
-      <div class="group-header">
-        <span class="group-title">트레이싱</span>
-        <span class="help-icon" data-help="원본 이미지를 가이드로 깔고 그 위에 사용자가 직접 그리는 모드.
-어니언 스킨 + 멀티프레임과 결합하면 모션 작업이 됩니다.
-
-트레이싱 모드 ON
-  • 브러시/지우개가 별도 트레이스 레이어에만 적용 (원본 안 건드림)
-  • 가이드(원본)는 투명도 조절 가능
-
-가이드 투명도
-  • 0% = 원본 안 보임 (빈 캔버스에 그리기)
-  • 50% = 원본 살짝 비침 (트레이싱)
-  • 100% = 원본 그대로 (참고만)
-
-트레이스 지우기 — 현재 프레임의 트레이스만 클리어 (원본 보존)
-
-저장 시 출력 모드 — 원본만 / 트레이스만 / 합친 결과 중 선택">?</span>
-      </div>
-      <div class="row">
-        <label class="checkbox"><input type="checkbox" id="tracing-mode">트레이싱 모드</label>
-      </div>
-      <div class="row-stack">
-        <span class="row-stack-label">가이드 투명도 <span id="guide-opacity-val" style="color:#4a8;">50%</span></span>
-        <input type="range" id="guide-opacity" min="0" max="100" value="50" style="width:100%;">
-      </div>
-      <div class="row">
-        <button id="btn-clear-trace" style="width:100%;">현재 트레이스 지우기</button>
-      </div>
-    </div>
-
-    <div class="group">
-      <div class="group-header">
-        <span class="group-title">색 / 팔레트</span>
-        <span class="help-icon" data-help="활성 색 — 브러시/페인트가 사용할 색
-  • 박스 클릭 → 자유 색 픽커 (OS 컬러 다이얼로그)
-  • 팔레트 셀 클릭 → 그 색으로 설정
-  • 스포이드 도구로 도트에서 추출
-
-팔레트 — 사용 가능한 색 그리드 (최대 64색)
-  • 도트화 후: 결과의 사용 색을 빈도순 표시
-  • 도트화 전: PICO-8 16색 기본 팔레트
-  • [팔레트 다시 추출] 버튼으로 갱신
-
-도구
-  • 스포이드: 도트 클릭 → 활성 색 추출
-  • 브러시: 클릭/드래그 → 활성 색으로 칠하기 (큰 격자 한 칸 또는 1×1)
-  • 지우개: 클릭/드래그 → 도트 투명화">?</span>
-      </div>
+    <!-- 색 / 팔레트 -->
+    <details class="panel-section" open id="ps-color">
+      <summary>색 / 팔레트 <span id="palette-count" class="badge-count">0</span></summary>
       <div class="row-stack">
         <span class="row-stack-label">활성 색 (클릭 → 픽커)</span>
         <div id="active-color-box" data-rgb="—" title="클릭해서 색 픽커 열기"></div>
@@ -317,13 +144,157 @@
         </div>
       </div>
       <div class="row-stack">
-        <span class="row-stack-label">팔레트 <span id="palette-count" style="color:#666;">0</span></span>
+        <span class="row-stack-label">팔레트</span>
         <div id="palette-grid"></div>
       </div>
       <div class="row">
         <button id="btn-extract-palette" style="width:100%;">팔레트 다시 추출</button>
       </div>
-    </div>
+    </details>
+
+    <!-- 도구 속성 (현재 도구별 동적) -->
+    <details class="panel-section" open id="ps-tool">
+      <summary>도구 속성 <span id="tool-name" class="badge-count">선택 없음</span></summary>
+      <div id="tool-props">
+        <div class="tool-prop" data-for="brush erase">
+          <div class="row-stack">
+            <span class="row-stack-label">브러시 크기</span>
+            <div class="radio-group">
+              <input type="radio" name="brush-size" id="bs-cell" value="cell" checked><label for="bs-cell">큰 격자</label>
+              <input type="radio" name="brush-size" id="bs-1" value="1"><label for="bs-1">1×1</label>
+            </div>
+          </div>
+        </div>
+        <div class="tool-prop" data-for="brush">
+          <div class="row-stack">
+            <span class="row-stack-label">셀 변주 <span style="color:#888; font-size:11px;">(큰격자에만)</span></span>
+            <div class="radio-group">
+              <input type="radio" name="cell-variation" id="cv-off" value="off" checked><label for="cv-off">끔</label>
+              <input type="radio" name="cell-variation" id="cv-low" value="low"><label for="cv-low">약</label>
+              <input type="radio" name="cell-variation" id="cv-mid" value="mid"><label for="cv-mid">중</label>
+              <input type="radio" name="cell-variation" id="cv-high" value="high"><label for="cv-high">강</label>
+            </div>
+          </div>
+        </div>
+        <div class="tool-prop" data-for="select">
+          <div class="row-stack">
+            <span class="row-stack-label">선택 모양</span>
+            <div class="radio-group">
+              <input type="radio" name="select-mode" id="sm-rect" value="rect" checked><label for="sm-rect">사각형 (M)</label>
+              <input type="radio" name="select-mode" id="sm-lasso" value="lasso"><label for="sm-lasso">올가미 (L)</label>
+            </div>
+          </div>
+          <div class="row-stack">
+            <span class="row-stack-label">선택 영역 빈 도트 채움</span>
+            <div class="radio-group">
+              <input type="radio" name="fill-mode" id="fm-avg" value="avg" checked><label for="fm-avg">평균</label>
+              <input type="radio" name="fill-mode" id="fm-grad" value="grad"><label for="fm-grad">그라데이션</label>
+            </div>
+          </div>
+          <div class="row">
+            <button id="btn-fill-area" class="primary" style="width:100%;">빈 도트 채움</button>
+          </div>
+          <div class="row">
+            <button id="btn-clear-sel" style="width:100%;">선택 해제</button>
+          </div>
+        </div>
+        <div class="tool-prop default-prop">
+          <div class="modal-info" style="text-align:center; padding:18px 8px; color:#777;">
+            도구를 선택하면 옵션이 표시됩니다.<br>
+            <span style="font-size:11px;">(좌측 V/M/L/B/E/I)</span>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- 도트화 -->
+    <details class="panel-section" open id="ps-pixelize">
+      <summary>도트화</summary>
+      <div class="row-stack">
+        <span class="row-stack-label">모드</span>
+        <div class="radio-group">
+          <input type="radio" name="ds" id="ds-avg" value="avg"><label for="ds-avg">평균</label>
+          <input type="radio" name="ds" id="ds-dom" value="dom" checked><label for="ds-dom">우세</label>
+          <input type="radio" name="ds" id="ds-det" value="det"><label for="ds-det">디테일</label>
+        </div>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">색 수</span>
+        <div class="radio-group">
+          <input type="radio" name="color" id="c0" value="0" checked><label for="c0">원본</label>
+          <input type="radio" name="color" id="c8" value="8"><label for="c8">8</label>
+          <input type="radio" name="color" id="c16" value="16"><label for="c16">16</label>
+          <input type="radio" name="color" id="c32" value="32"><label for="c32">32</label>
+          <input type="radio" name="color" id="c64" value="64"><label for="c64">64</label>
+        </div>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">채도</span>
+        <div class="radio-group">
+          <input type="radio" name="sat" id="s100" value="100" checked><label for="s100">기본</label>
+          <input type="radio" name="sat" id="s130" value="130"><label for="s130">+30</label>
+          <input type="radio" name="sat" id="s160" value="160"><label for="s160">+60</label>
+          <input type="radio" name="sat" id="s200" value="200"><label for="s200">+100</label>
+        </div>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">아웃라인</span>
+        <div class="radio-group">
+          <input type="radio" name="outline" id="ol-off" value="off" checked><label for="ol-off">끔</label>
+          <input type="radio" name="outline" id="ol-fine" value="fine"><label for="ol-fine">도트</label>
+          <input type="radio" name="outline" id="ol-coarse" value="coarse"><label for="ol-coarse">격자</label>
+        </div>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">적용 범위</span>
+        <div class="radio-group">
+          <input type="radio" name="apply-range" id="ar-cur" value="current" checked><label for="ar-cur">현재</label>
+          <input type="radio" name="apply-range" id="ar-all" value="all"><label for="ar-all">모든 프레임</label>
+        </div>
+      </div>
+      <div class="row">
+        <button id="btn-pixelize" class="primary" style="width:100%;">도트화 실행</button>
+      </div>
+    </details>
+
+    <!-- 해상도 -->
+    <details class="panel-section" open id="ps-res">
+      <summary>해상도 <span id="res-current" class="badge-count"></span></summary>
+      <div class="row-stack">
+        <span class="row-stack-label">정수배 확대 (NEAREST)</span>
+        <div class="radio-group">
+          <button class="res-btn" data-factor="2">×2</button>
+          <button class="res-btn" data-factor="3">×3</button>
+          <button class="res-btn" data-factor="4">×4</button>
+          <button class="res-btn" data-factor="8">×8</button>
+        </div>
+      </div>
+    </details>
+
+    <!-- 배경 제거 -->
+    <details class="panel-section" open id="ps-bg">
+      <summary>배경 제거 (rembg)</summary>
+      <div class="row" style="gap:6px;">
+        <button id="btn-bg" style="flex:1;">배경 제거 실행</button>
+        <label class="checkbox"><input type="checkbox" id="bg-precise">정밀</label>
+      </div>
+    </details>
+
+    <!-- 트레이싱 -->
+    <details class="panel-section" id="ps-trace">
+      <summary>트레이싱</summary>
+      <div class="row">
+        <label class="checkbox"><input type="checkbox" id="tracing-mode">트레이싱 모드</label>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">가이드 투명도 <span id="guide-opacity-val" style="color:#4a8;">50%</span></span>
+        <input type="range" id="guide-opacity" min="0" max="100" value="50" style="width:100%;">
+      </div>
+      <div class="row">
+        <button id="btn-clear-trace" style="width:100%;">현재 트레이스 지우기</button>
+      </div>
+    </details>
+
   </div>
 
 </div>

@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  frames: [],              // [{ source, original, pixelized, fileName, traceLayer }]
+  frames: [],              // [{ source, original, pixelized, fileName, traceLayer, visible, opacity, name }]
   // 두 슬롯 — 좌(0), 우(1). 우측은 frameIdx=-1이면 비활성(단일 뷰)
   slots: [
     { frameIdx: 0, layout: null },
@@ -17,6 +17,7 @@ const state = {
   palette: [],
   tracing: false,
   guideOpacity: 0.5,
+  viewMode: "anim",        // "anim" | "layer"
 };
 
 // frameIdx, layout은 active slot의 alias
@@ -135,7 +136,10 @@ function setStatus(text, type = "") {
     }
   }
 }
-function getGridSize() { return parseInt(document.querySelector('input[name="grid"]:checked').value, 10); }
+function getGridSize() {
+  const sel = document.getElementById("grid-select");
+  return sel ? parseInt(sel.value, 10) : 64;
+}
 function getColorLimit() { return parseInt(document.querySelector('input[name="color"]:checked').value, 10); }
 function showGrid() { return $("show-grid").checked; }
 
@@ -291,6 +295,12 @@ function redraw() {
     badge.classList.add("hidden");
     $("file-info").textContent = "";
   }
+  // 우측 패널 해상도 라벨 (있을 때만)
+  const resLabel = document.getElementById("res-current");
+  if (resLabel) {
+    if (af && af.source) resLabel.textContent = `현재 ${af.source.width}×${af.source.height}`;
+    else resLabel.textContent = "";
+  }
 }
 
 function drawSlot(slotIdx, canvasEl, ctxEl) {
@@ -338,44 +348,70 @@ function drawSlot(slotIdx, canvasEl, ctxEl) {
 
   drawCheckerboardOn(ctxEl, x, y, dw, dh);
 
-  // 어니언 스킨 — 활성 슬롯에서만
-  if (slotIdx === state.activeSlot) {
-    const onionEl = $("tl-onion");
-    if (onionEl && onionEl.checked && state.frames.length > 1) {
-      const prevIdx = (slot.frameIdx - 1 + state.frames.length) % state.frames.length;
-      const nextIdx = (slot.frameIdx + 1) % state.frames.length;
+  // 어니언 스킨 — 활성 슬롯 + 애니메이션 모드에서만 (레이어 모드는 별도 stacked 렌더)
+  if (slotIdx === state.activeSlot && state.viewMode === "anim") {
+    const onionRange = getOnionRange();
+    const onionTint = $("onion-tint")?.checked;
+    if (onionRange !== 0 && state.frames.length > 1) {
+      const total = state.frames.length;
+      const maxRange = onionRange === "all" ? total - 1 : onionRange;
       ctxEl.save();
-      if (prevIdx !== slot.frameIdx) {
-        const prev = state.frames[prevIdx];
-        if (prev && prev.source) {
-          ctxEl.globalAlpha = 0.35;
-          ctxEl.drawImage(imageDataToCanvas2(prev.source), x, y, dw, dh);
-          if (prev.traceLayer) ctxEl.drawImage(imageDataToCanvas2(prev.traceLayer), x, y, dw, dh);
+      // 거리별 그리기 (멀수록 흐려짐)
+      for (let d = maxRange; d >= 1; d--) {
+        const alpha = 0.5 * (1 - (d - 1) / Math.max(1, maxRange));
+        const prevIdx = (slot.frameIdx - d + total * d) % total;
+        const nextIdx = (slot.frameIdx + d) % total;
+        // prev (붉은 틴트)
+        if (prevIdx !== slot.frameIdx) {
+          const prev = state.frames[prevIdx];
+          if (prev && prev.source && prev.visible !== false) {
+            drawTintedFrame(ctxEl, prev, x, y, dw, dh, alpha, onionTint ? "#ff5555" : null);
+          }
         }
-      }
-      if (nextIdx !== slot.frameIdx && nextIdx !== prevIdx) {
-        const next = state.frames[nextIdx];
-        if (next && next.source) {
-          ctxEl.globalAlpha = 0.25;
-          ctxEl.drawImage(imageDataToCanvas2(next.source), x, y, dw, dh);
-          if (next.traceLayer) ctxEl.drawImage(imageDataToCanvas2(next.traceLayer), x, y, dw, dh);
+        // next (푸른 틴트)
+        if (nextIdx !== slot.frameIdx && nextIdx !== prevIdx) {
+          const next = state.frames[nextIdx];
+          if (next && next.source && next.visible !== false) {
+            drawTintedFrame(ctxEl, next, x, y, dw, dh, alpha, onionTint ? "#5599ff" : null);
+          }
         }
       }
       ctxEl.restore();
     }
   }
 
-  // 원본 + 트레이싱
-  const guideAlpha = (state.tracing && slotIdx === state.activeSlot) ? state.guideOpacity : 1.0;
-  if (guideAlpha > 0) {
+  // 레이어 모드: 모든 표시(👁) 프레임을 패널 순서대로 stacked.
+  // 패널 = 위가 앞 (frames 배열 순으로 그려서 마지막=최상단). 활성 프레임도 동일 순서.
+  if (slotIdx === state.activeSlot && state.viewMode === "layer") {
     ctxEl.save();
-    ctxEl.globalAlpha = guideAlpha;
-    // 슬롯 0이면 캐시된 imageDataToCanvas (메인) 사용해도 같음
-    ctxEl.drawImage(imageDataToCanvas2(src), x, y, dw, dh);
+    state.frames.forEach((fr, i) => {
+      if (fr.visible === false) return;
+      if (!fr.source) return;
+      const op = fr.opacity === undefined ? 1 : fr.opacity;
+      if (op <= 0) return;
+      ctxEl.globalAlpha = op;
+      ctxEl.drawImage(imageDataToCanvas2(fr.source), x, y, dw, dh);
+      if (fr.traceLayer) ctxEl.drawImage(imageDataToCanvas2(fr.traceLayer), x, y, dw, dh);
+    });
     ctxEl.restore();
+    // 레이어 모드에서는 아래 활성 프레임 블록을 건너뜀 → 일찍 빠지기 위해 플래그
+    state._layerModeRendered = true;
+  } else {
+    state._layerModeRendered = false;
   }
-  if (f.traceLayer) {
-    ctxEl.drawImage(imageDataToCanvas2(f.traceLayer), x, y, dw, dh);
+
+  // 활성 프레임 본체 + 트레이싱 (애니메이션 모드일 때만 — 레이어 모드는 위에서 다 그렸음)
+  if (!state._layerModeRendered || slotIdx !== state.activeSlot) {
+    const guideAlpha = (state.tracing && slotIdx === state.activeSlot) ? state.guideOpacity : 1.0;
+    if (guideAlpha > 0) {
+      ctxEl.save();
+      ctxEl.globalAlpha = guideAlpha;
+      ctxEl.drawImage(imageDataToCanvas2(src), x, y, dw, dh);
+      ctxEl.restore();
+    }
+    if (f.traceLayer) {
+      ctxEl.drawImage(imageDataToCanvas2(f.traceLayer), x, y, dw, dh);
+    }
   }
 
   // 격자
@@ -550,13 +586,134 @@ async function loadImageFromFile(file) {
   }
 }
 
+function isFrameBlank(f) {
+  if (!f || !f.source) return true;
+  const d = f.source.data;
+  for (let i = 3; i < d.length; i += 4) {
+    if (d[i] !== 0) return false;
+  }
+  // traceLayer도 비어야 진짜 blank
+  if (f.traceLayer) {
+    const td = f.traceLayer.data;
+    for (let i = 3; i < td.length; i += 4) {
+      if (td[i] !== 0) return false;
+    }
+  }
+  return true;
+}
+
+function isFrameUntitledBlank(f) {
+  return f && f.fileName === "untitled" && isFrameBlank(f);
+}
+
+function addInitialBlankFrame() {
+  const n = getGridSize() * getSub();
+  const img = new ImageData(n, n);
+  state.frames.push({
+    source: img,
+    original: img,
+    pixelized: true,
+    fileName: "untitled",
+    name: "프레임 1",
+    traceLayer: null,
+    visible: true,
+    opacity: 1.0,
+  });
+  state.frameIdx = 0;
+  state.zoom = "fit";
+  state.panX = 0;
+  state.panY = 0;
+  invalidateSourceCache();
+}
+
+function nearestUpscale(img, factor) {
+  if (!img || factor < 2) return img;
+  const oldW = img.width, oldH = img.height;
+  const newW = oldW * factor, newH = oldH * factor;
+  const out = new ImageData(newW, newH);
+  const sd = img.data, od = out.data;
+  for (let y = 0; y < newH; y++) {
+    const sy = (y / factor) | 0;
+    for (let x = 0; x < newW; x++) {
+      const sx = (x / factor) | 0;
+      const si = (sy * oldW + sx) * 4;
+      const di = (y * newW + x) * 4;
+      od[di] = sd[si];
+      od[di + 1] = sd[si + 1];
+      od[di + 2] = sd[si + 2];
+      od[di + 3] = sd[si + 3];
+    }
+  }
+  return out;
+}
+
+function expandResolutionFactor(factor) {
+  if (state.frames.length === 0) {
+    setStatus("프레임이 없습니다", "error");
+    return;
+  }
+  const f = state.frames[state.frameIdx];
+  if (!f || !f.source) return;
+  if (factor < 2) return;
+  const newW = f.source.width * factor;
+  const newH = f.source.height * factor;
+  if (newW > 4096 || newH > 4096) {
+    setStatus(`너무 큽니다 (${newW}×${newH}). 4096 이하로`, "error");
+    return;
+  }
+  snapshot();
+  f.source = nearestUpscale(f.source, factor);
+  if (f.original) f.original = nearestUpscale(f.original, factor);
+  if (f.traceLayer) f.traceLayer = nearestUpscale(f.traceLayer, factor);
+  f.pixelized = true;
+  // sub UI를 1로 리셋 (이미 충분히 잘게)
+  const subSel = document.getElementById("sub-select");
+  if (subSel) subSel.value = "1";
+  // 격자 select에 source 해상도와 매칭되는 값이 있으면 자동 선택
+  const gridSel = document.getElementById("grid-select");
+  if (gridSel && Array.from(gridSel.options).some(o => o.value === String(newW))) {
+    gridSel.value = String(newW);
+  }
+  state.selection = null;
+  state.draftSelection = null;
+  invalidateSourceCache();
+  refreshPalette();
+  renderTimeline();
+  redraw();
+  setStatus(`해상도 ×${factor} 확대 → ${newW}×${newH}`, "success");
+}
+
+function resizeBlankCanvas() {
+  const f = state.frames[state.frameIdx];
+  if (!f || !isFrameUntitledBlank(f)) return false;
+  const n = getGridSize() * getSub();
+  if (f.source && f.source.width === n && f.source.height === n) return false;
+  const img = new ImageData(n, n);
+  f.source = img;
+  f.original = img;
+  f.traceLayer = null;
+  f.pixelized = true;
+  state.zoom = "fit";
+  state.panX = 0;
+  state.panY = 0;
+  invalidateSourceCache();
+  updateZoomDisplay();
+  renderTimeline();
+  redraw();
+  return true;
+}
+
 function addFrame(imgData, fileName) {
+  const idx = state.frames.length + 1;
   state.frames.push({
     source: imgData,
     original: imgData,
     pixelized: false,
-    fileName: fileName || `frame_${state.frames.length + 1}`,
+    fileName: fileName || `frame_${idx}`,
+    name: stripExt(fileName) || `프레임 ${idx}`,
     traceLayer: null,  // ImageData (사용자가 트레이싱 모드에서 그리면 lazy 생성)
+    visible: true,
+    opacity: 1.0,
   });
   state.frameIdx = state.frames.length - 1;
   state.selection = null;
@@ -600,6 +757,12 @@ function removeFrame(idx) {
 
 $("file-input").addEventListener("change", async (e) => {
   const files = Array.from(e.target.files);
+  // 시작 시 자동 생성된 빈 untitled 프레임 1장만 있으면 제거 후 첨부
+  if (files.length > 0 && state.frames.length === 1 && isFrameUntitledBlank(state.frames[0])) {
+    state.frames = [];
+    state.frameIdx = 0;
+    clearHistory();
+  }
   for (const f of files) {
     await loadImageFromFile(f);
   }
@@ -989,7 +1152,8 @@ function getDownsampleMode() {
   return document.querySelector('input[name="ds"]:checked').value;
 }
 function getSub() {
-  return parseInt(document.querySelector('input[name="sub"]:checked').value, 10);
+  const sel = document.getElementById("sub-select");
+  return sel ? parseInt(sel.value, 10) : 1;
 }
 function getOutlineMode() {
   const r = document.querySelector('input[name="outline"]:checked');
@@ -1061,10 +1225,9 @@ async function applyPixelize() {
 
 $("btn-pixelize").addEventListener("click", applyPixelize);
 
-document.querySelectorAll('input[name="grid"]').forEach((r) => {
-  r.addEventListener("change", () => {
-    if (state.pixelized) applyPixelize(); else redraw();
-  });
+document.getElementById("grid-select")?.addEventListener("change", () => {
+  if (resizeBlankCanvas()) return;
+  if (state.pixelized) applyPixelize(); else redraw();
 });
 document.querySelectorAll('input[name="color"]').forEach((r) => {
   r.addEventListener("change", () => {
@@ -1088,10 +1251,9 @@ document.querySelectorAll('input[name="outline"]').forEach((r) => {
 });
 $("show-grid").addEventListener("change", redraw);
 $("show-subgrid").addEventListener("change", redraw);
-document.querySelectorAll('input[name="sub"]').forEach((r) => {
-  r.addEventListener("change", () => {
-    if (state.pixelized) applyPixelize(); else redraw();
-  });
+document.getElementById("sub-select")?.addEventListener("change", () => {
+  if (resizeBlankCanvas()) return;
+  if (state.pixelized) applyPixelize(); else redraw();
 });
 
 // ---------- 배경 제거 (서버 rembg) ----------
@@ -1270,9 +1432,59 @@ window.addEventListener("keydown", (e) => {
 });
 
 // ---------- 영역 선택 도구 ----------
-function getTool() {
-  const r = document.querySelector('input[name="tool"]:checked');
-  return r ? r.value : "none";
+// 내부 도구 값: "none" | "rect" | "lasso" | "brush" | "erase" | "pick"
+// 단, UI 버튼은 "select"(rect|lasso 통합) / "brush" / "erase" / "pick" 만 노출
+const TOOL_KEYS = {
+  "m": "rect", "l": "lasso",
+  "i": "pick", "b": "brush", "e": "erase",
+};
+const TOOL_LABEL = {
+  none: "선택 없음", rect: "선택 (사각형)", lasso: "선택 (올가미)",
+  pick: "스포이드", brush: "브러시", erase: "지우개",
+};
+
+let _activeTool = "none";
+function getTool() { return _activeTool; }
+function isSelectTool(t) { return t === "rect" || t === "lasso"; }
+
+function setTool(t, opts = {}) {
+  _activeTool = t || "none";
+  // toolbar-left 버튼 active 상태 갱신 — select 버튼은 rect/lasso 둘 다 active
+  document.querySelectorAll(".tool-btn[data-tool]").forEach((btn) => {
+    const dt = btn.dataset.tool;
+    let isActive = false;
+    if (dt === "select") isActive = isSelectTool(_activeTool);
+    else isActive = (dt === _activeTool);
+    btn.classList.toggle("active", isActive);
+  });
+  // 선택 도구의 sub-mode (rect/lasso) 라디오 동기화
+  if (isSelectTool(_activeTool)) {
+    const r = document.querySelector(`input[name="select-mode"][value="${_activeTool}"]`);
+    if (r) r.checked = true;
+  }
+  // tool-props 동적 표시
+  document.querySelectorAll(".tool-prop").forEach((el) => {
+    if (el.classList.contains("default-prop")) {
+      el.classList.toggle("show", _activeTool === "none" || _activeTool === "pick");
+      return;
+    }
+    const tools = (el.dataset.for || "").split(/\s+/);
+    let show = tools.includes(_activeTool);
+    if (tools.includes("select") && isSelectTool(_activeTool)) show = true;
+    el.classList.toggle("show", show);
+  });
+  // tool-name 라벨
+  const nameLabel = document.getElementById("tool-name");
+  if (nameLabel) nameLabel.textContent = TOOL_LABEL[_activeTool] || "선택 없음";
+  // 커서
+  if (_activeTool === "brush" || _activeTool === "erase" || _activeTool === "pick") {
+    canvas.style.cursor = "crosshair";
+  } else {
+    canvas.style.cursor = "";
+  }
+  state.draftSelection = null;
+  redraw();
+  if (!opts.silent) setStatus(`도구: ${TOOL_LABEL[_activeTool] || "선택 없음"}`);
 }
 function getBoundsMode() {
   return "touch";  // 옵션 제거 — 항상 걸침 동작
@@ -2101,6 +2313,31 @@ function getBrushSize() {
   return r ? r.value : "cell";
 }
 
+function getCellVariation() {
+  const r = document.querySelector('input[name="cell-variation"]:checked');
+  return r ? r.value : "off";
+}
+
+const VARIATION_AMOUNT = { off: 0, low: 0.04, mid: 0.10, high: 0.20 };
+
+function hashNoise(x, y) {
+  // 결정론적 노이즈 -1 ~ 1. 같은 (x, y)는 항상 같은 값
+  let h = (((x | 0) * 374761393) + ((y | 0) * 668265263)) | 0;
+  h = (h ^ (h >>> 13)) >>> 0;
+  h = (h * 1274126177) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return (h / 4294967295) * 2 - 1;
+}
+
+function applyCellVariation(baseColor, x, y, level) {
+  if (level === "off") return baseColor;
+  const amt = VARIATION_AMOUNT[level] || 0;
+  if (amt === 0) return baseColor;
+  const [h, s, v] = rgbToHsv(baseColor[0], baseColor[1], baseColor[2]);
+  const newV = Math.max(0, Math.min(1, v + hashNoise(x, y) * amt));
+  return hsvToRgb(h, s, newV);
+}
+
 function getEditTarget() {
   // 트레이싱 모드면 traceLayer (없으면 생성), 아니면 source
   const f = state.frames[state.frameIdx];
@@ -2114,16 +2351,17 @@ function getEditTarget() {
   return f.source;
 }
 
-function paintOne(ix, iy, tool) {
+function paintOne(ix, iy, tool, color) {
   const target = getEditTarget();
   if (!target) return;
   if (ix < 0 || iy < 0 || ix >= target.width || iy >= target.height) return;
   const idx = (iy * target.width + ix) * 4;
   const data = target.data;
   if (tool === "brush") {
-    data[idx] = state.activeColor[0];
-    data[idx + 1] = state.activeColor[1];
-    data[idx + 2] = state.activeColor[2];
+    const c = color || state.activeColor;
+    data[idx] = c[0];
+    data[idx + 1] = c[1];
+    data[idx + 2] = c[2];
     data[idx + 3] = 255;
   } else if (tool === "erase") {
     data[idx + 3] = 0;
@@ -2140,9 +2378,14 @@ function paintPixel(ix, iy, tool) {
       const sub = getSub();
       const bx = Math.floor(ix / sub) * sub;
       const by = Math.floor(iy / sub) * sub;
+      const variation = (tool === "brush") ? getCellVariation() : "off";
       for (let dy = 0; dy < sub; dy++) {
         for (let dx = 0; dx < sub; dx++) {
-          paintOne(bx + dx, by + dy, tool);
+          const px = bx + dx, py = by + dy;
+          const c = (variation !== "off")
+            ? applyCellVariation(state.activeColor, px, py, variation)
+            : null;
+          paintOne(px, py, tool, c);
         }
       }
     } else {
@@ -2227,19 +2470,23 @@ $("btn-fill-area").addEventListener("click", () => {
   setStatus(`색 보정 완료 (${fMode === "grad" ? "그라데이션" : "평균"}): ${result.filled} 도트 채움`);
 });
 
-document.querySelectorAll('input[name="tool"]').forEach((r) => {
-  r.addEventListener("change", () => {
-    const t = getTool();
-    // 영역 도구 → 다른 도구로 바뀌면 selection은 유지(보정에 사용 가능)
-    // 단 draft는 무조건 클리어
-    state.draftSelection = null;
-    // 픽셀 편집 도구로 갈 때 cursor 표시
-    if (t === "brush" || t === "erase" || t === "pick") {
-      canvas.style.cursor = "crosshair";
+document.querySelectorAll(".tool-btn[data-tool]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (btn.dataset.tool === "select") {
+      // 현재 라디오 값 (없으면 rect)
+      const r = document.querySelector('input[name="select-mode"]:checked');
+      const mode = r ? r.value : "rect";
+      setTool(mode);
     } else {
-      canvas.style.cursor = "";
+      setTool(btn.dataset.tool);
     }
-    redraw();
+  });
+});
+
+// select-mode 라디오 변경 → 도구 활성 상태에서만 실제 도구도 전환
+document.querySelectorAll('input[name="select-mode"]').forEach((r) => {
+  r.addEventListener("change", () => {
+    if (isSelectTool(_activeTool)) setTool(r.value);
   });
 });
 
@@ -2247,8 +2494,18 @@ window.addEventListener("resize", redraw);
 state.palette = DEFAULT_PALETTE.map((c) => c.slice());
 renderActiveColor();
 renderPalette();
+addInitialBlankFrame();
 renderTimeline();
 redraw();
+setTool("none", { silent: true });
+
+document.querySelectorAll(".res-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const factor = parseInt(btn.dataset.factor, 10);
+    if (!factor || factor < 2) return;
+    expandResolutionFactor(factor);
+  });
+});
 
 // ---------- 호버 토스트 ----------
 const tooltip = $("tooltip");
@@ -2274,18 +2531,11 @@ document.querySelectorAll(".help-icon").forEach((icon) => {
   icon.addEventListener("mouseleave", () => tooltip.classList.remove("show"));
 });
 
-// ---------- 사이드바 / 우측 패널 토글 ----------
-const btnToggle = $("btn-toggle");
+// ---------- 우측 패널 토글 ----------
 const btnToggleRight = $("btn-toggle-right");
-const userToggled = { left: false, right: false };
+const userToggled = { right: false };
 
-btnToggle.addEventListener("click", () => {
-  userToggled.left = true;
-  const collapsed = document.body.classList.toggle("sidebar-collapsed");
-  btnToggle.textContent = collapsed ? "▶" : "◀";
-  setTimeout(redraw, 220);
-});
-btnToggleRight.addEventListener("click", () => {
+btnToggleRight?.addEventListener("click", () => {
   userToggled.right = true;
   const collapsed = document.body.classList.toggle("rightpanel-collapsed");
   btnToggleRight.textContent = collapsed ? "◀" : "▶";
@@ -2296,14 +2546,9 @@ btnToggleRight.addEventListener("click", () => {
 function applyResponsive() {
   const w = window.innerWidth;
   if (!userToggled.right) {
-    if (w < 1280) document.body.classList.add("rightpanel-collapsed");
+    if (w < 1180) document.body.classList.add("rightpanel-collapsed");
     else document.body.classList.remove("rightpanel-collapsed");
-    btnToggleRight.textContent = document.body.classList.contains("rightpanel-collapsed") ? "◀" : "▶";
-  }
-  if (!userToggled.left) {
-    if (w < 960) document.body.classList.add("sidebar-collapsed");
-    else document.body.classList.remove("sidebar-collapsed");
-    btnToggle.textContent = document.body.classList.contains("sidebar-collapsed") ? "▶" : "◀";
+    if (btnToggleRight) btnToggleRight.textContent = document.body.classList.contains("rightpanel-collapsed") ? "◀" : "▶";
   }
 }
 applyResponsive();
@@ -2346,6 +2591,11 @@ window.addEventListener("resize", () => {
       return;
     }
     setStatus(`${files.length}개 이미지 추가 중...`, "processing");
+    if (state.frames.length === 1 && isFrameUntitledBlank(state.frames[0])) {
+      state.frames = [];
+      state.frameIdx = 0;
+      clearHistory();
+    }
     for (const f of files) {
       await loadImageFromFile(f);
     }
@@ -2354,18 +2604,7 @@ window.addEventListener("resize", () => {
 })();
 
 // ---------- 단축키: 도구 전환 / F1 안내 / Ctrl+S 저장 / ESC 모달 닫기 ----------
-const TOOL_KEYS = {
-  "v": "none",   // 선택 해제 (V)
-  "m": "rect",   // 사각형 (M = Marquee)
-  "l": "lasso",  // 올가미 (L)
-  "i": "pick",   // 스포이드 (I)
-  "b": "brush",  // 브러시 (B)
-  "e": "erase",  // 지우개 (E)
-};
-const TOOL_LABEL = {
-  none: "선택 없음", rect: "사각형", lasso: "올가미",
-  pick: "스포이드", brush: "브러시", erase: "지우개",
-};
+// TOOL_KEYS / TOOL_LABEL 은 위에서 정의됨
 
 window.addEventListener("keydown", (e) => {
   // INPUT/TEXTAREA에 포커스 있으면 단축키 무시
@@ -2419,12 +2658,7 @@ window.addEventListener("keydown", (e) => {
     const key = e.key.toLowerCase();
     if (TOOL_KEYS[key]) {
       e.preventDefault();
-      const radio = document.querySelector(`input[name="tool"][value="${TOOL_KEYS[key]}"]`);
-      if (radio && !radio.disabled) {
-        radio.checked = true;
-        radio.dispatchEvent(new Event("change"));
-        setStatus(`도구: ${TOOL_LABEL[TOOL_KEYS[key]]}`);
-      }
+      setTool(TOOL_KEYS[key]);
     }
   }
 });
@@ -2755,13 +2989,20 @@ function renderTimeline() {
   container.innerHTML = "";
   state.frames.forEach((frame, i) => {
     const div = document.createElement("div");
-    div.className = "tl-frame" + (i === state.frameIdx ? " active" : "");
+    let cls = "tl-frame";
+    if (i === state.frameIdx) cls += " active";
+    if (frame.visible === false) cls += " hidden-layer";
+    div.className = cls;
+    div.draggable = true;
+
+    // === 썸네일 ===
+    const thumb = document.createElement("div");
+    thumb.className = "tl-thumb";
     const c = document.createElement("canvas");
-    const size = 50;
+    const size = 56;
     c.width = size; c.height = size;
     const ctx = c.getContext("2d");
     ctx.imageSmoothingEnabled = false;
-    // 체커 배경 (간단히)
     for (let py = 0; py < size; py += 6) {
       for (let px = 0; px < size; px += 6) {
         ctx.fillStyle = ((px / 6 + py / 6) % 2 === 0) ? "#888" : "#aaa";
@@ -2775,15 +3016,120 @@ function renderTimeline() {
       const h = frame.source.height * ratio;
       ctx.drawImage(tmp, (size - w) / 2, (size - h) / 2, w, h);
     }
-    div.appendChild(c);
+    thumb.appendChild(c);
+
+    // 표시 토글 (👁)
+    const visBtn = document.createElement("button");
+    visBtn.className = "tl-vis" + (frame.visible === false ? " off" : "");
+    visBtn.textContent = frame.visible === false ? "·" : "👁";
+    visBtn.title = frame.visible === false ? "표시" : "숨김";
+    visBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      frame.visible = frame.visible === false ? true : false;
+      renderTimeline();
+      redraw();
+    });
+    thumb.appendChild(visBtn);
+
+    // 프레임 번호
     const num = document.createElement("span");
     num.className = "tl-frame-num";
     num.textContent = String(i + 1);
-    div.appendChild(num);
-    div.addEventListener("click", () => selectFrame(i));
+    thumb.appendChild(num);
+
+    div.appendChild(thumb);
+
+    // 이름 (더블클릭 편집)
+    const nameDiv = document.createElement("div");
+    nameDiv.className = "tl-name";
+    nameDiv.textContent = frame.name || `프레임 ${i + 1}`;
+    nameDiv.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = frame.name || `프레임 ${i + 1}`;
+      nameDiv.innerHTML = "";
+      nameDiv.appendChild(input);
+      input.focus();
+      input.select();
+      const commit = () => {
+        frame.name = input.value.trim() || `프레임 ${i + 1}`;
+        renderTimeline();
+      };
+      input.addEventListener("blur", commit);
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") { commit(); ev.preventDefault(); }
+        else if (ev.key === "Escape") { renderTimeline(); }
+      });
+    });
+    div.appendChild(nameDiv);
+
+    // 불투명도 슬라이더
+    const opWrap = document.createElement("div");
+    opWrap.className = "tl-opacity";
+    const opIn = document.createElement("input");
+    opIn.type = "range";
+    opIn.min = "0"; opIn.max = "100";
+    const opPct = Math.round((frame.opacity === undefined ? 1 : frame.opacity) * 100);
+    opIn.value = String(opPct);
+    opIn.style.setProperty("--p", opPct + "%");
+    opIn.addEventListener("input", (e) => {
+      e.stopPropagation();
+      frame.opacity = parseInt(opIn.value, 10) / 100;
+      opVal.textContent = opIn.value;
+      opIn.style.setProperty("--p", opIn.value + "%");
+      redraw();
+    });
+    opIn.addEventListener("click", (e) => e.stopPropagation());
+    opIn.addEventListener("mousedown", (e) => e.stopPropagation());
+    const opVal = document.createElement("span");
+    opVal.className = "tl-opacity-val";
+    opVal.textContent = String(opPct);
+    opWrap.appendChild(opIn);
+    opWrap.appendChild(opVal);
+    div.appendChild(opWrap);
+
+    // 클릭 → 활성 프레임
+    div.addEventListener("click", (e) => {
+      // 슬라이더/버튼/이름 input 등 내부 요소 클릭은 selectFrame 안 함
+      if (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON") return;
+      if (e.target.closest("input, button")) return;
+      if (i !== state.frameIdx) selectFrame(i);
+    });
+
+    // 드래그로 순서 변경 — 단, 슬라이더/버튼/이름 input에서 시작한 드래그는 무시
+    div.addEventListener("dragstart", (e) => {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON" || e.target.closest("input, button")) {
+        e.preventDefault();
+        return;
+      }
+      e.dataTransfer.setData("text/plain", String(i));
+      div.classList.add("dragging");
+    });
+    div.addEventListener("dragend", () => {
+      div.classList.remove("dragging");
+      document.querySelectorAll(".tl-frame.drop-target").forEach(el => el.classList.remove("drop-target"));
+    });
+    div.addEventListener("dragover", (e) => { e.preventDefault(); div.classList.add("drop-target"); });
+    div.addEventListener("dragleave", () => div.classList.remove("drop-target"));
+    div.addEventListener("drop", (e) => {
+      e.preventDefault();
+      div.classList.remove("drop-target");
+      const fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
+      const toIdx = i;
+      if (isNaN(fromIdx) || fromIdx === toIdx) return;
+      const moved = state.frames.splice(fromIdx, 1)[0];
+      state.frames.splice(toIdx, 0, moved);
+      if (state.frameIdx === fromIdx) state.frameIdx = toIdx;
+      else if (fromIdx < state.frameIdx && toIdx >= state.frameIdx) state.frameIdx--;
+      else if (fromIdx > state.frameIdx && toIdx <= state.frameIdx) state.frameIdx++;
+      invalidateSourceCache();
+      renderTimeline();
+      redraw();
+    });
+
     container.appendChild(div);
     if (i === state.frameIdx) {
-      // active 프레임이 보이도록 스크롤
       setTimeout(() => div.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" }), 0);
     }
   });
@@ -2791,6 +3137,190 @@ function renderTimeline() {
     ? "프레임 0개"
     : `프레임 ${state.frameIdx + 1} / ${state.frames.length}`;
 }
+
+// ===== 레이어 패널 (제거됨, 타임라인으로 통합) =====
+// renderLayersPanel은 no-op으로 유지 (구코드 호환)
+function renderLayersPanel() { /* deprecated: 타임라인 카드에 통합 */ }
+// 아래는 더 이상 사용 안 함 (호환용으로 함수로 감싸지 않은 채 보존)
+function _legacyRenderLayersPanel_unused() {
+  const list = document.getElementById("layers-list");
+  if (!list) return;
+  list.innerHTML = "";
+  const order = state.frames.map((_, i) => i).reverse();
+  order.forEach((i) => {
+    const f = state.frames[i];
+    const item = document.createElement("div");
+    item.className = "layer-item" + (i === state.frameIdx ? " active" : "");
+    item.dataset.idx = String(i);
+    item.draggable = true;
+
+    // 표시 토글
+    const visBtn = document.createElement("button");
+    visBtn.className = "layer-vis" + (f.visible === false ? " off" : "");
+    visBtn.textContent = f.visible === false ? "·" : "👁";
+    visBtn.title = f.visible === false ? "표시" : "숨김";
+    visBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      f.visible = f.visible === false ? true : false;
+      renderLayersPanel();
+      renderTimeline();
+      redraw();
+    });
+
+    // 썸네일
+    const thumbWrap = document.createElement("div");
+    thumbWrap.className = "layer-thumb";
+    const c = document.createElement("canvas");
+    c.width = 36; c.height = 36;
+    const ctxT = c.getContext("2d");
+    ctxT.imageSmoothingEnabled = false;
+    if (f.source) {
+      const tmp = imageDataToCanvas2(f.source);
+      const ratio = Math.min(36 / f.source.width, 36 / f.source.height);
+      const w = f.source.width * ratio, h = f.source.height * ratio;
+      ctxT.drawImage(tmp, (36 - w) / 2, (36 - h) / 2, w, h);
+    }
+    thumbWrap.appendChild(c);
+
+    // 이름 (더블클릭 편집)
+    const nameDiv = document.createElement("div");
+    nameDiv.className = "layer-name";
+    nameDiv.textContent = f.name || `프레임 ${i + 1}`;
+    nameDiv.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = f.name || `프레임 ${i + 1}`;
+      nameDiv.innerHTML = "";
+      nameDiv.appendChild(input);
+      input.focus();
+      input.select();
+      const commit = () => {
+        f.name = input.value.trim() || `프레임 ${i + 1}`;
+        renderLayersPanel();
+      };
+      input.addEventListener("blur", commit);
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") { commit(); ev.preventDefault(); }
+        else if (ev.key === "Escape") { renderLayersPanel(); }
+      });
+    });
+
+    // 불투명도 슬라이더
+    const opWrap = document.createElement("div");
+    opWrap.className = "layer-opacity";
+    const opIn = document.createElement("input");
+    opIn.type = "range";
+    opIn.min = "0"; opIn.max = "100";
+    opIn.value = String(Math.round((f.opacity === undefined ? 1 : f.opacity) * 100));
+    opIn.addEventListener("input", (e) => {
+      e.stopPropagation();
+      f.opacity = parseInt(opIn.value, 10) / 100;
+      opVal.textContent = opIn.value + "%";
+      redraw();
+    });
+    opIn.addEventListener("click", (e) => e.stopPropagation());
+    const opVal = document.createElement("span");
+    opVal.className = "layer-opacity-val";
+    opVal.textContent = opIn.value + "%";
+    opWrap.appendChild(opIn);
+    opWrap.appendChild(opVal);
+
+    item.appendChild(visBtn);
+    item.appendChild(thumbWrap);
+    const center = document.createElement("div");
+    center.appendChild(nameDiv);
+    item.appendChild(center);
+    item.appendChild(opWrap);
+
+    item.addEventListener("click", () => {
+      if (i !== state.frameIdx) selectFrame(i);
+    });
+
+    // 드래그 순서 변경
+    item.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("text/plain", String(i));
+      item.classList.add("dragging");
+    });
+    item.addEventListener("dragend", () => {
+      item.classList.remove("dragging");
+      document.querySelectorAll(".layer-item.drop-target").forEach(el => el.classList.remove("drop-target"));
+    });
+    item.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      item.classList.add("drop-target");
+    });
+    item.addEventListener("dragleave", () => item.classList.remove("drop-target"));
+    item.addEventListener("drop", (e) => {
+      e.preventDefault();
+      item.classList.remove("drop-target");
+      const fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
+      const toIdx = i;
+      if (isNaN(fromIdx) || fromIdx === toIdx) return;
+      const moved = state.frames.splice(fromIdx, 1)[0];
+      state.frames.splice(toIdx, 0, moved);
+      // active frame 인덱스 보정
+      if (state.frameIdx === fromIdx) state.frameIdx = toIdx;
+      else if (fromIdx < state.frameIdx && toIdx >= state.frameIdx) state.frameIdx--;
+      else if (fromIdx > state.frameIdx && toIdx <= state.frameIdx) state.frameIdx++;
+      invalidateSourceCache();
+      renderLayersPanel();
+      renderTimeline();
+      redraw();
+    });
+
+    list.appendChild(item);
+  });
+  const cnt = document.getElementById("layer-count");
+  if (cnt) cnt.textContent = String(state.frames.length);
+}
+
+// 모드 토글
+function setViewMode(mode) {
+  if (mode !== "anim" && mode !== "layer") return;
+  state.viewMode = mode;
+  document.querySelectorAll(".mode-btn").forEach((b) => b.classList.remove("active"));
+  const btn = document.getElementById(mode === "anim" ? "mode-anim" : "mode-layer");
+  if (btn) btn.classList.add("active");
+  redraw();
+  setStatus(mode === "anim" ? "🎬 애니메이션 모드" : "🍰 레이어 모드 (표시 ON 모두 겹침)");
+}
+
+document.getElementById("mode-anim")?.addEventListener("click", () => setViewMode("anim"));
+document.getElementById("mode-layer")?.addEventListener("click", () => setViewMode("layer"));
+
+document.getElementById("btn-layers-all-show")?.addEventListener("click", () => {
+  state.frames.forEach(f => f.visible = true);
+  renderLayersPanel();
+  renderTimeline();
+  redraw();
+});
+document.getElementById("btn-layers-all-hide")?.addEventListener("click", () => {
+  state.frames.forEach(f => f.visible = false);
+  renderLayersPanel();
+  renderTimeline();
+  redraw();
+});
+
+document.getElementById("btn-layer-add")?.addEventListener("click", () => {
+  const n = (state.frames[state.frameIdx]?.source?.width)
+    || (getGridSize() * getSub());
+  const img = new ImageData(n, n);
+  const idx = state.frames.length + 1;
+  state.frames.push({
+    source: img, original: img,
+    pixelized: true,
+    fileName: "untitled",
+    name: `프레임 ${idx}`,
+    traceLayer: null,
+    visible: true, opacity: 1.0,
+  });
+  state.frameIdx = state.frames.length - 1;
+  invalidateSourceCache();
+  renderTimeline();
+  redraw();
+  setStatus(`빈 프레임 추가됨 (${n}×${n})`, "success");
+});
 
 $("tl-remove").addEventListener("click", () => {
   if (state.frames.length === 0) return;
@@ -2836,7 +3366,40 @@ $("tl-fps").addEventListener("input", () => {
     }, 1000 / fps);
   }
 });
-$("tl-onion").addEventListener("change", redraw);
+$("onion-range")?.addEventListener("change", redraw);
+$("onion-tint")?.addEventListener("change", redraw);
+$("tl-add")?.addEventListener("click", () => $("file-input").click());
+
+// 어니언 범위 헬퍼
+function getOnionRange() {
+  const el = $("onion-range");
+  if (!el) return 0;
+  const v = el.value;
+  if (v === "0") return 0;
+  if (v === "all") return "all";
+  return parseInt(v, 10) || 0;
+}
+
+// 색 틴트 적용해서 프레임 그리기 (어니언 스킨용)
+function drawTintedFrame(ctxEl, frame, x, y, dw, dh, alpha, tintColor) {
+  ctxEl.globalAlpha = alpha;
+  if (!tintColor) {
+    ctxEl.drawImage(imageDataToCanvas2(frame.source), x, y, dw, dh);
+    if (frame.traceLayer) ctxEl.drawImage(imageDataToCanvas2(frame.traceLayer), x, y, dw, dh);
+    return;
+  }
+  // 틴트: 오프스크린에 프레임 그리고 source-atop으로 색 곱셈
+  const off = document.createElement("canvas");
+  off.width = frame.source.width;
+  off.height = frame.source.height;
+  const oc = off.getContext("2d");
+  oc.drawImage(imageDataToCanvas2(frame.source), 0, 0);
+  if (frame.traceLayer) oc.drawImage(imageDataToCanvas2(frame.traceLayer), 0, 0);
+  oc.globalCompositeOperation = "source-atop";
+  oc.fillStyle = tintColor;
+  oc.fillRect(0, 0, off.width, off.height);
+  ctxEl.drawImage(off, x, y, dw, dh);
+}
 
 // ---------- 통합 저장 메뉴 ----------
 $("btn-save-menu").addEventListener("click", () => {
