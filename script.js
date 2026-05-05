@@ -1449,33 +1449,21 @@ function isSelectTool(t) { return t === "rect" || t === "lasso"; }
 
 function setTool(t, opts = {}) {
   _activeTool = t || "none";
-  // toolbar-left 버튼 active 상태 갱신 — select 버튼은 rect/lasso 둘 다 active
-  document.querySelectorAll(".tool-btn[data-tool]").forEach((btn) => {
-    const dt = btn.dataset.tool;
-    let isActive = false;
-    if (dt === "select") isActive = isSelectTool(_activeTool);
-    else isActive = (dt === _activeTool);
-    btn.classList.toggle("active", isActive);
-  });
+  // 도구 라디오 동기화 — rect/lasso면 "select" 라디오 활성
+  let radioVal = _activeTool;
+  if (isSelectTool(_activeTool)) radioVal = "select";
+  const tr = document.querySelector(`input[name="tool"][value="${radioVal}"]`);
+  if (tr) tr.checked = true;
   // 선택 도구의 sub-mode (rect/lasso) 라디오 동기화
   if (isSelectTool(_activeTool)) {
     const r = document.querySelector(`input[name="select-mode"][value="${_activeTool}"]`);
     if (r) r.checked = true;
   }
-  // tool-props 동적 표시
-  document.querySelectorAll(".tool-prop").forEach((el) => {
-    if (el.classList.contains("default-prop")) {
-      el.classList.toggle("show", _activeTool === "none" || _activeTool === "pick");
-      return;
-    }
-    const tools = (el.dataset.for || "").split(/\s+/);
-    let show = tools.includes(_activeTool);
-    if (tools.includes("select") && isSelectTool(_activeTool)) show = true;
-    el.classList.toggle("show", show);
-  });
-  // tool-name 라벨
-  const nameLabel = document.getElementById("tool-name");
-  if (nameLabel) nameLabel.textContent = TOOL_LABEL[_activeTool] || "선택 없음";
+  // 도구별 옵션은 모두 항상 표시 (tool-prop 동적 토글 안 함)
+  // 라벨 갱신
+  const labelText = TOOL_LABEL[_activeTool] || "선택 없음";
+  const nameBadge = document.getElementById("tool-name-badge");
+  if (nameBadge) nameBadge.textContent = labelText;
   // 커서
   if (_activeTool === "brush" || _activeTool === "erase" || _activeTool === "pick") {
     canvas.style.cursor = "crosshair";
@@ -1484,7 +1472,7 @@ function setTool(t, opts = {}) {
   }
   state.draftSelection = null;
   redraw();
-  if (!opts.silent) setStatus(`도구: ${TOOL_LABEL[_activeTool] || "선택 없음"}`);
+  if (!opts.silent) setStatus(`도구: ${labelText}`);
 }
 function getBoundsMode() {
   return "touch";  // 옵션 제거 — 항상 걸침 동작
@@ -1578,14 +1566,24 @@ function onCanvasMouseDown(e, slotIdx) {
     (slotIdx === 0 ? canvas : refCanvas).style.cursor = "grabbing";
     return;
   }
-  if (e.button !== 0) return;
+  // 좌클릭(0) 또는 우클릭(2)만 처리
+  if (e.button !== 0 && e.button !== 2) return;
   const p = canvasToImageCoord(e, slotIdx);
   if (!p) return;
-  if (tool === "pick") {
+
+  // 우클릭 + 브러시 → 임시 지우개 (Aseprite 스타일)
+  let effectiveTool = tool;
+  if (e.button === 2) {
+    if (tool !== "brush") return;  // 브러시일 때만 의미 있음
+    effectiveTool = "erase";
+    e.preventDefault();
+  }
+
+  if (effectiveTool === "pick") {
     pickColorAt(Math.floor(p.ix), Math.floor(p.iy));
     return;
   }
-  if (tool === "brush" || tool === "erase") {
+  if (effectiveTool === "brush" || effectiveTool === "erase") {
     snapshot();
     // 트레이싱 모드: traceLayer를 새 ImageData로 교체. 일반 모드: source 교체
     const f = state.frames[state.frameIdx];
@@ -1603,11 +1601,13 @@ function onCanvasMouseDown(e, slotIdx) {
       }
     }
     pixelDragging = true;
-    pixelTool = tool;
+    pixelTool = effectiveTool;
     pixelLast = null;
     paintAt(e);
     return;
   }
+  // 좌클릭만 영역 선택 도구로
+  if (e.button !== 0) return;
   if (tool !== "rect" && tool !== "lasso") return;
   dragging = true;
   if (tool === "rect") {
@@ -1619,6 +1619,7 @@ function onCanvasMouseDown(e, slotIdx) {
   redraw();
 }
 canvas.addEventListener("mousedown", (e) => onCanvasMouseDown(e, 0));
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 // refCanvas mousedown 등록은 refCanvas 변수가 선언된 후 (아래에서)
 
 window.addEventListener("mousemove", (e) => {
@@ -2470,15 +2471,14 @@ $("btn-fill-area").addEventListener("click", () => {
   setStatus(`색 보정 완료 (${fMode === "grad" ? "그라데이션" : "평균"}): ${result.filled} 도트 채움`);
 });
 
-document.querySelectorAll(".tool-btn[data-tool]").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    if (btn.dataset.tool === "select") {
-      // 현재 라디오 값 (없으면 rect)
-      const r = document.querySelector('input[name="select-mode"]:checked');
-      const mode = r ? r.value : "rect";
-      setTool(mode);
+// 도구 라디오 — "select"는 rect/lasso 중 현재 sub-mode 사용
+document.querySelectorAll('input[name="tool"]').forEach((r) => {
+  r.addEventListener("change", () => {
+    if (r.value === "select") {
+      const sm = document.querySelector('input[name="select-mode"]:checked');
+      setTool(sm ? sm.value : "rect");
     } else {
-      setTool(btn.dataset.tool);
+      setTool(r.value);
     }
   });
 });
@@ -2529,12 +2529,21 @@ function positionTooltip(icon) {
 document.querySelectorAll(".help-icon").forEach((icon) => {
   icon.addEventListener("mouseenter", () => positionTooltip(icon));
   icon.addEventListener("mouseleave", () => tooltip.classList.remove("show"));
+  // summary 안에 있으면 클릭이 details 토글로 전파되지 않도록
+  icon.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); });
 });
 
-// ---------- 우측 패널 토글 ----------
+// ---------- 좌/우 패널 토글 ----------
+const btnToggleLeft = $("btn-toggle-left");
 const btnToggleRight = $("btn-toggle-right");
-const userToggled = { right: false };
+const userToggled = { left: false, right: false };
 
+btnToggleLeft?.addEventListener("click", () => {
+  userToggled.left = true;
+  const collapsed = document.body.classList.toggle("leftpanel-collapsed");
+  btnToggleLeft.textContent = collapsed ? "▶" : "◀";
+  setTimeout(redraw, 220);
+});
 btnToggleRight?.addEventListener("click", () => {
   userToggled.right = true;
   const collapsed = document.body.classList.toggle("rightpanel-collapsed");
@@ -2542,11 +2551,15 @@ btnToggleRight?.addEventListener("click", () => {
   setTimeout(redraw, 220);
 });
 
-// ---------- 반응형 (페이지 로드 시 + 리사이즈 시 자동 접기, 사용자 토글 후엔 자동 안 함) ----------
 function applyResponsive() {
   const w = window.innerWidth;
+  if (!userToggled.left) {
+    if (w < 1000) document.body.classList.add("leftpanel-collapsed");
+    else document.body.classList.remove("leftpanel-collapsed");
+    if (btnToggleLeft) btnToggleLeft.textContent = document.body.classList.contains("leftpanel-collapsed") ? "▶" : "◀";
+  }
   if (!userToggled.right) {
-    if (w < 1180) document.body.classList.add("rightpanel-collapsed");
+    if (w < 1280) document.body.classList.add("rightpanel-collapsed");
     else document.body.classList.remove("rightpanel-collapsed");
     if (btnToggleRight) btnToggleRight.textContent = document.body.classList.contains("rightpanel-collapsed") ? "◀" : "▶";
   }
@@ -2818,6 +2831,7 @@ function cancelFloating() {
 const refCanvas = $("ref-canvas");
 const refCtx = refCanvas.getContext("2d");
 refCanvas.addEventListener("mousedown", (e) => onCanvasMouseDown(e, 1));
+refCanvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
 // 마우스 hover로 활성 슬롯 자동 전환 (드래그 중에는 변경 안 함)
 canvas.addEventListener("mouseenter", () => {
@@ -2985,6 +2999,7 @@ function renderTimeline() {
   updateEmptyState();
   if (typeof renderRefFrameOptions === "function") renderRefFrameOptions();
   if (typeof renderRefCanvas === "function" && document.body.classList.contains("ref-on")) renderRefCanvas();
+  if (typeof renderLayersPanel === "function") renderLayersPanel();
   const container = $("timeline-frames");
   container.innerHTML = "";
   state.frames.forEach((frame, i) => {
@@ -2995,18 +3010,15 @@ function renderTimeline() {
     div.className = cls;
     div.draggable = true;
 
-    // === 썸네일 ===
-    const thumb = document.createElement("div");
-    thumb.className = "tl-thumb";
     const c = document.createElement("canvas");
     const size = 56;
     c.width = size; c.height = size;
     const ctx = c.getContext("2d");
     ctx.imageSmoothingEnabled = false;
-    for (let py = 0; py < size; py += 6) {
-      for (let px = 0; px < size; px += 6) {
-        ctx.fillStyle = ((px / 6 + py / 6) % 2 === 0) ? "#888" : "#aaa";
-        ctx.fillRect(px, py, 6, 6);
+    for (let py = 0; py < size; py += 8) {
+      for (let px = 0; px < size; px += 8) {
+        ctx.fillStyle = ((px / 8 + py / 8) % 2 === 0) ? "#888" : "#aaa";
+        ctx.fillRect(px, py, 8, 8);
       }
     }
     if (frame.source) {
@@ -3016,93 +3028,19 @@ function renderTimeline() {
       const h = frame.source.height * ratio;
       ctx.drawImage(tmp, (size - w) / 2, (size - h) / 2, w, h);
     }
-    thumb.appendChild(c);
+    div.appendChild(c);
 
-    // 표시 토글 (👁)
-    const visBtn = document.createElement("button");
-    visBtn.className = "tl-vis" + (frame.visible === false ? " off" : "");
-    visBtn.textContent = frame.visible === false ? "·" : "👁";
-    visBtn.title = frame.visible === false ? "표시" : "숨김";
-    visBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      frame.visible = frame.visible === false ? true : false;
-      renderTimeline();
-      redraw();
-    });
-    thumb.appendChild(visBtn);
-
-    // 프레임 번호
     const num = document.createElement("span");
     num.className = "tl-frame-num";
     num.textContent = String(i + 1);
-    thumb.appendChild(num);
+    div.appendChild(num);
 
-    div.appendChild(thumb);
-
-    // 이름 (더블클릭 편집)
-    const nameDiv = document.createElement("div");
-    nameDiv.className = "tl-name";
-    nameDiv.textContent = frame.name || `프레임 ${i + 1}`;
-    nameDiv.addEventListener("dblclick", (e) => {
-      e.stopPropagation();
-      const input = document.createElement("input");
-      input.type = "text";
-      input.value = frame.name || `프레임 ${i + 1}`;
-      nameDiv.innerHTML = "";
-      nameDiv.appendChild(input);
-      input.focus();
-      input.select();
-      const commit = () => {
-        frame.name = input.value.trim() || `프레임 ${i + 1}`;
-        renderTimeline();
-      };
-      input.addEventListener("blur", commit);
-      input.addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter") { commit(); ev.preventDefault(); }
-        else if (ev.key === "Escape") { renderTimeline(); }
-      });
-    });
-    div.appendChild(nameDiv);
-
-    // 불투명도 슬라이더
-    const opWrap = document.createElement("div");
-    opWrap.className = "tl-opacity";
-    const opIn = document.createElement("input");
-    opIn.type = "range";
-    opIn.min = "0"; opIn.max = "100";
-    const opPct = Math.round((frame.opacity === undefined ? 1 : frame.opacity) * 100);
-    opIn.value = String(opPct);
-    opIn.style.setProperty("--p", opPct + "%");
-    opIn.addEventListener("input", (e) => {
-      e.stopPropagation();
-      frame.opacity = parseInt(opIn.value, 10) / 100;
-      opVal.textContent = opIn.value;
-      opIn.style.setProperty("--p", opIn.value + "%");
-      redraw();
-    });
-    opIn.addEventListener("click", (e) => e.stopPropagation());
-    opIn.addEventListener("mousedown", (e) => e.stopPropagation());
-    const opVal = document.createElement("span");
-    opVal.className = "tl-opacity-val";
-    opVal.textContent = String(opPct);
-    opWrap.appendChild(opIn);
-    opWrap.appendChild(opVal);
-    div.appendChild(opWrap);
-
-    // 클릭 → 활성 프레임
-    div.addEventListener("click", (e) => {
-      // 슬라이더/버튼/이름 input 등 내부 요소 클릭은 selectFrame 안 함
-      if (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON") return;
-      if (e.target.closest("input, button")) return;
+    div.addEventListener("click", () => {
       if (i !== state.frameIdx) selectFrame(i);
     });
 
-    // 드래그로 순서 변경 — 단, 슬라이더/버튼/이름 input에서 시작한 드래그는 무시
+    // 드래그 순서 변경
     div.addEventListener("dragstart", (e) => {
-      if (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON" || e.target.closest("input, button")) {
-        e.preventDefault();
-        return;
-      }
       e.dataTransfer.setData("text/plain", String(i));
       div.classList.add("dragging");
     });
@@ -3138,14 +3076,12 @@ function renderTimeline() {
     : `프레임 ${state.frameIdx + 1} / ${state.frames.length}`;
 }
 
-// ===== 레이어 패널 (제거됨, 타임라인으로 통합) =====
-// renderLayersPanel은 no-op으로 유지 (구코드 호환)
-function renderLayersPanel() { /* deprecated: 타임라인 카드에 통합 */ }
-// 아래는 더 이상 사용 안 함 (호환용으로 함수로 감싸지 않은 채 보존)
-function _legacyRenderLayersPanel_unused() {
+// ===== 레이어 패널 (우측 Photoshop 스타일) =====
+function renderLayersPanel() {
   const list = document.getElementById("layers-list");
   if (!list) return;
   list.innerHTML = "";
+  // 위 = 앞 (Photoshop 컨벤션) → 마지막 프레임이 패널 최상단
   const order = state.frames.map((_, i) => i).reverse();
   order.forEach((i) => {
     const f = state.frames[i];
@@ -3212,23 +3148,27 @@ function _legacyRenderLayersPanel_unused() {
     const opIn = document.createElement("input");
     opIn.type = "range";
     opIn.min = "0"; opIn.max = "100";
-    opIn.value = String(Math.round((f.opacity === undefined ? 1 : f.opacity) * 100));
+    const opPct = Math.round((f.opacity === undefined ? 1 : f.opacity) * 100);
+    opIn.value = String(opPct);
+    opIn.style.setProperty("--p", opPct + "%");
     opIn.addEventListener("input", (e) => {
       e.stopPropagation();
       f.opacity = parseInt(opIn.value, 10) / 100;
       opVal.textContent = opIn.value + "%";
+      opIn.style.setProperty("--p", opIn.value + "%");
       redraw();
     });
     opIn.addEventListener("click", (e) => e.stopPropagation());
     const opVal = document.createElement("span");
     opVal.className = "layer-opacity-val";
-    opVal.textContent = opIn.value + "%";
+    opVal.textContent = opPct + "%";
     opWrap.appendChild(opIn);
     opWrap.appendChild(opVal);
 
     item.appendChild(visBtn);
     item.appendChild(thumbWrap);
     const center = document.createElement("div");
+    center.className = "layer-name-wrap";
     center.appendChild(nameDiv);
     item.appendChild(center);
     item.appendChild(opWrap);
@@ -3303,8 +3243,11 @@ document.getElementById("btn-layers-all-hide")?.addEventListener("click", () => 
 });
 
 document.getElementById("btn-layer-add")?.addEventListener("click", () => {
-  const n = (state.frames[state.frameIdx]?.source?.width)
-    || (getGridSize() * getSub());
+  // 활성 프레임이 도트화된 상태면 같은 도트 사이즈, 아니면 격자×세분
+  const f = state.frames[state.frameIdx];
+  const n = (f && f.pixelized && f.source)
+    ? f.source.width
+    : (getGridSize() * getSub());
   const img = new ImageData(n, n);
   const idx = state.frames.length + 1;
   state.frames.push({
@@ -3316,7 +3259,14 @@ document.getElementById("btn-layer-add")?.addEventListener("click", () => {
     visible: true, opacity: 1.0,
   });
   state.frameIdx = state.frames.length - 1;
+  state.zoom = "fit";
+  state.panX = 0;
+  state.panY = 0;
+  state.selection = null;
+  state.draftSelection = null;
   invalidateSourceCache();
+  updateZoomDisplay();
+  refreshPalette();
   renderTimeline();
   redraw();
   setStatus(`빈 프레임 추가됨 (${n}×${n})`, "success");
@@ -3368,7 +3318,7 @@ $("tl-fps").addEventListener("input", () => {
 });
 $("onion-range")?.addEventListener("change", redraw);
 $("onion-tint")?.addEventListener("change", redraw);
-$("tl-add")?.addEventListener("click", () => $("file-input").click());
+// (tl-add 제거됨 — + 이미지는 상단 탑바에만)
 
 // 어니언 범위 헬퍼
 function getOnionRange() {

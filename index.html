@@ -5,7 +5,7 @@
 <title>PixelMotion</title>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js"></script>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=13">
 </head>
 <body>
 
@@ -43,16 +43,123 @@
 
 <div class="body-wrap">
 
-  <!-- LEFT VERTICAL TOOL PALETTE -->
-  <div id="toolbar-left">
-    <button class="tool-btn" data-tool="select" title="선택 — 사각형/올가미 (M/L)"><span class="tk">S</span></button>
-    <div class="tool-divider"></div>
-    <button class="tool-btn" data-tool="brush" title="브러시 (B)"><span class="tk">B</span></button>
-    <button class="tool-btn" data-tool="erase" title="지우개 (E)"><span class="tk">E</span></button>
-    <button class="tool-btn" data-tool="pick" title="스포이드 (I)"><span class="tk">I</span></button>
-    <div class="tool-divider"></div>
-    <button class="tool-btn" id="btn-flip-h" title="좌우 반전">↔</button>
+  <!-- LEFT PANEL: 도구 / 도구 속성 -->
+  <div id="leftpanel">
+
+    <details class="panel-section" open id="ps-tools">
+      <summary>도구 <span id="tool-name-badge" class="badge-count">선택 없음</span><span class="help-icon" data-help="단축키
+  V — 도구 없음 / M — 사각형 영역 / L — 올가미 영역
+  B — 브러시 / E — 지우개 / I — 스포이드
+
+브러시 우클릭 = 임시 지우개 (Aseprite 스타일)
+
+선택 모양 — 선택 도구일 때만 (사각형/올가미)
+
+브러시 크기
+  • 큰 격자: sub×sub 도트를 한 번에
+  • 1×1: 한 도트씩
+
+셀 변주 — 큰격자 브러시로 칠할 때 sub×sub 안 명도(V) 미세 변주. 끔/약(±4%)/중(±10%)/강(±20%). 결정론적 노이즈.
+
+빈 도트 채움 — 선택 영역 안 비어있는 도트를 색으로
+  • 평균: 영역 평균색 한 가지로
+  • 그라데이션: BFS 시드→평균까지 점진 수렴
+
+좌우 반전 — 현재 프레임 통째로 반전 (8방향 작업용)">?</span></summary>
+
+      <div class="row-stack">
+        <span class="row-stack-label">활성 도구 <span style="color:#666; font-size:10px;">(V/M/L/B/E/I)</span></span>
+        <div class="radio-group">
+          <input type="radio" name="tool" id="tool-none" value="none" checked><label for="tool-none" title="V">없음</label>
+          <input type="radio" name="tool" id="tool-select" value="select"><label for="tool-select" title="M/L — 모양은 아래에서">선택</label>
+          <input type="radio" name="tool" id="tool-pick" value="pick"><label for="tool-pick" title="I">스포이드</label>
+        </div>
+        <div class="radio-group" style="margin-top:4px;">
+          <input type="radio" name="tool" id="tool-brush" value="brush"><label for="tool-brush" title="B">브러시</label>
+          <input type="radio" name="tool" id="tool-erase" value="erase"><label for="tool-erase" title="E">지우개</label>
+        </div>
+      </div>
+
+      <div class="row-stack">
+        <span class="row-stack-label">선택 모양 <span style="color:#666; font-size:10px;">(선택 도구)</span></span>
+        <div class="radio-group">
+          <input type="radio" name="select-mode" id="sm-rect" value="rect" checked><label for="sm-rect">사각형 (M)</label>
+          <input type="radio" name="select-mode" id="sm-lasso" value="lasso"><label for="sm-lasso">올가미 (L)</label>
+        </div>
+      </div>
+
+      <div class="row-stack">
+        <span class="row-stack-label">브러시 크기 <span style="color:#666; font-size:10px;">(브러시·지우개)</span></span>
+        <div class="radio-group">
+          <input type="radio" name="brush-size" id="bs-cell" value="cell" checked><label for="bs-cell">큰 격자</label>
+          <input type="radio" name="brush-size" id="bs-1" value="1"><label for="bs-1">1×1</label>
+        </div>
+      </div>
+
+      <div class="row-stack">
+        <span class="row-stack-label">셀 변주 <span style="color:#666; font-size:10px;">(브러시 큰격자)</span></span>
+        <div class="radio-group">
+          <input type="radio" name="cell-variation" id="cv-off" value="off" checked><label for="cv-off">끔</label>
+          <input type="radio" name="cell-variation" id="cv-low" value="low"><label for="cv-low">약</label>
+          <input type="radio" name="cell-variation" id="cv-mid" value="mid"><label for="cv-mid">중</label>
+          <input type="radio" name="cell-variation" id="cv-high" value="high"><label for="cv-high">강</label>
+        </div>
+      </div>
+
+      <div class="row-stack">
+        <span class="row-stack-label">빈 도트 채움 방식 <span style="color:#666; font-size:10px;">(선택 영역)</span></span>
+        <div class="radio-group">
+          <input type="radio" name="fill-mode" id="fm-avg" value="avg" checked><label for="fm-avg">평균</label>
+          <input type="radio" name="fill-mode" id="fm-grad" value="grad"><label for="fm-grad">그라데이션</label>
+        </div>
+      </div>
+
+      <div class="row" style="border-top:1px solid #353535; padding-top:8px; margin-top:8px;">
+        <button id="btn-fill-area" class="primary" style="width:100%;">빈 도트 채움 실행</button>
+      </div>
+      <div class="row">
+        <button id="btn-clear-sel" style="width:100%;">선택 해제</button>
+      </div>
+      <div class="row">
+        <button id="btn-flip-h" style="width:100%;" title="현재 프레임 좌우 반전">↔ 좌우 반전</button>
+      </div>
+    </details>
+
+    <!-- 색 / 팔레트 -->
+    <details class="panel-section" open id="ps-color">
+      <summary>색 / 팔레트 <span id="palette-count" class="badge-count">0</span><span class="help-icon" data-help="활성 색 — 브러시·페인트가 사용할 색
+  • 박스 클릭 → HSV 색 픽커
+  • 팔레트 셀 클릭 → 그 색으로
+  • 스포이드 도구로 도트에서 추출
+
+팔레트 (최대 64색)
+  • 도트화 후: 결과 사용 색을 빈도순 표시
+  • 도트화 전: PICO-8 기본 16색
+  • [팔레트 다시 추출]로 갱신">?</span></summary>
+      <div class="row-stack">
+        <span class="row-stack-label">활성 색 (클릭 → 픽커)</span>
+        <div id="active-color-box" data-rgb="—" title="클릭해서 색 픽커 열기"></div>
+        <div id="color-picker">
+          <div id="picker-area"><div id="picker-marker" style="left:0%; top:100%;"></div></div>
+          <div id="picker-hue"><div id="hue-marker" style="left:0%;"></div></div>
+          <div id="picker-hex-row">
+            <label>HEX</label>
+            <input type="text" id="picker-hex" placeholder="#000000" maxlength="7" spellcheck="false">
+          </div>
+        </div>
+      </div>
+      <div class="row-stack">
+        <span class="row-stack-label">팔레트</span>
+        <div id="palette-grid"></div>
+      </div>
+      <div class="row">
+        <button id="btn-extract-palette" style="width:100%;">팔레트 다시 추출</button>
+      </div>
+    </details>
+
   </div>
+
+  <button id="btn-toggle-left" title="좌측 패널 접기/펼치기">◀</button>
 
   <div id="main">
     <div id="stage">
@@ -104,11 +211,7 @@
         <label class="checkbox"><input type="checkbox" id="onion-tint">색 틴트</label>
         <div class="topbar-divider"></div>
         <button id="btn-layer-add" title="현재 사이즈로 빈 프레임 추가">+ 빈 프레임</button>
-        <button id="tl-add" title="이미지 파일 추가 → 새 프레임">+ 이미지</button>
         <button id="tl-remove" title="현재 프레임 삭제">삭제</button>
-        <div class="topbar-divider"></div>
-        <button id="btn-layers-all-show" title="모든 프레임 표시">👁 전체</button>
-        <button id="btn-layers-all-hide" title="모든 프레임 숨김">🚫 전체</button>
         <div class="topbar-divider"></div>
         <label class="topbar-label">참조
           <select id="ref-frame-header" title="우측에 표시할 프레임 (비어있음 = 단일 뷰)">
@@ -128,88 +231,26 @@
   <!-- RIGHT ACCORDION PANEL -->
   <div id="rightpanel">
 
-    <!-- 색 / 팔레트 -->
-    <details class="panel-section" open id="ps-color">
-      <summary>색 / 팔레트 <span id="palette-count" class="badge-count">0</span></summary>
-      <div class="row-stack">
-        <span class="row-stack-label">활성 색 (클릭 → 픽커)</span>
-        <div id="active-color-box" data-rgb="—" title="클릭해서 색 픽커 열기"></div>
-        <div id="color-picker">
-          <div id="picker-area"><div id="picker-marker" style="left:0%; top:100%;"></div></div>
-          <div id="picker-hue"><div id="hue-marker" style="left:0%;"></div></div>
-          <div id="picker-hex-row">
-            <label>HEX</label>
-            <input type="text" id="picker-hex" placeholder="#000000" maxlength="7" spellcheck="false">
-          </div>
-        </div>
-      </div>
-      <div class="row-stack">
-        <span class="row-stack-label">팔레트</span>
-        <div id="palette-grid"></div>
-      </div>
-      <div class="row">
-        <button id="btn-extract-palette" style="width:100%;">팔레트 다시 추출</button>
-      </div>
-    </details>
-
-    <!-- 도구 속성 (현재 도구별 동적) -->
-    <details class="panel-section" open id="ps-tool">
-      <summary>도구 속성 <span id="tool-name" class="badge-count">선택 없음</span></summary>
-      <div id="tool-props">
-        <div class="tool-prop" data-for="brush erase">
-          <div class="row-stack">
-            <span class="row-stack-label">브러시 크기</span>
-            <div class="radio-group">
-              <input type="radio" name="brush-size" id="bs-cell" value="cell" checked><label for="bs-cell">큰 격자</label>
-              <input type="radio" name="brush-size" id="bs-1" value="1"><label for="bs-1">1×1</label>
-            </div>
-          </div>
-        </div>
-        <div class="tool-prop" data-for="brush">
-          <div class="row-stack">
-            <span class="row-stack-label">셀 변주 <span style="color:#888; font-size:11px;">(큰격자에만)</span></span>
-            <div class="radio-group">
-              <input type="radio" name="cell-variation" id="cv-off" value="off" checked><label for="cv-off">끔</label>
-              <input type="radio" name="cell-variation" id="cv-low" value="low"><label for="cv-low">약</label>
-              <input type="radio" name="cell-variation" id="cv-mid" value="mid"><label for="cv-mid">중</label>
-              <input type="radio" name="cell-variation" id="cv-high" value="high"><label for="cv-high">강</label>
-            </div>
-          </div>
-        </div>
-        <div class="tool-prop" data-for="select">
-          <div class="row-stack">
-            <span class="row-stack-label">선택 모양</span>
-            <div class="radio-group">
-              <input type="radio" name="select-mode" id="sm-rect" value="rect" checked><label for="sm-rect">사각형 (M)</label>
-              <input type="radio" name="select-mode" id="sm-lasso" value="lasso"><label for="sm-lasso">올가미 (L)</label>
-            </div>
-          </div>
-          <div class="row-stack">
-            <span class="row-stack-label">선택 영역 빈 도트 채움</span>
-            <div class="radio-group">
-              <input type="radio" name="fill-mode" id="fm-avg" value="avg" checked><label for="fm-avg">평균</label>
-              <input type="radio" name="fill-mode" id="fm-grad" value="grad"><label for="fm-grad">그라데이션</label>
-            </div>
-          </div>
-          <div class="row">
-            <button id="btn-fill-area" class="primary" style="width:100%;">빈 도트 채움</button>
-          </div>
-          <div class="row">
-            <button id="btn-clear-sel" style="width:100%;">선택 해제</button>
-          </div>
-        </div>
-        <div class="tool-prop default-prop">
-          <div class="modal-info" style="text-align:center; padding:18px 8px; color:#777;">
-            도구를 선택하면 옵션이 표시됩니다.<br>
-            <span style="font-size:11px;">(좌측 V/M/L/B/E/I)</span>
-          </div>
-        </div>
-      </div>
-    </details>
-
     <!-- 도트화 -->
     <details class="panel-section" open id="ps-pixelize">
-      <summary>도트화</summary>
+      <summary>도트화 <span class="help-icon" data-help="이미지를 도트(픽셀아트) 스타일로 다운샘플.
+
+모드 (다운샘플 알고리즘)
+  • 평균: 셀 픽셀 평균. 흐릿하나 디테일 살음
+  • 우세: 다수 색군. 또렷, 작은 디테일 묻힘
+  • 디테일: 채도 가중 우세. 채도 디테일 보존
+
+색 수 — Median Cut 양자화. 적을수록 도트 룩 강함
+
+채도 — 다운샘플 후 부스트 (luminance preserving)
+
+아웃라인
+  • 도트: 외곽 1픽셀 검정으로
+  • 격자: 외곽 큰 격자 셀을 평탄화
+
+적용 범위 — 현재 1장 / 모든 프레임
+
+도트화 실행 — 위 설정으로 처리. 옵션 변경 시 자동 재적용.">?</span></summary>
       <div class="row-stack">
         <span class="row-stack-label">모드</span>
         <div class="radio-group">
@@ -259,7 +300,17 @@
 
     <!-- 해상도 -->
     <details class="panel-section" open id="ps-res">
-      <summary>해상도 <span id="res-current" class="badge-count"></span></summary>
+      <summary>해상도 <span id="res-current" class="badge-count"></span><span class="help-icon" data-help="NEAREST 정수배 확대.
+
+각 도트가 N×N 도트로 복제됩니다 (색은 그대로).
+
+작업 흐름 예
+  16×16 러프 → ×2 → 32×32 디테일 추가
+  → ×2 → 64×64 마감 → 저장
+
+확대 후 sub(세분화)는 자동 1로 리셋.
+
+비정수배(예: 6→8)는 도트 크기 불균일해서 미지원.">?</span></summary>
       <div class="row-stack">
         <span class="row-stack-label">정수배 확대 (NEAREST)</span>
         <div class="radio-group">
@@ -273,7 +324,14 @@
 
     <!-- 배경 제거 -->
     <details class="panel-section" open id="ps-bg">
-      <summary>배경 제거 (rembg)</summary>
+      <summary>배경 제거 (rembg) <span class="help-icon" data-help="AI(rembg)로 자동 배경 제거.
+
+기본: u2net 모델
+정밀: isnet + alpha matting (가장자리 더 깔끔, 더 느림)
+
+첫 호출 시 모델 ~170MB 다운로드.
+
+자동 배경 제거는 본질적 한계가 큼. 결과 부족하면 외부 툴(Photopea 등)에서 누끼 후 PNG로 import 권장.">?</span></summary>
       <div class="row" style="gap:6px;">
         <button id="btn-bg" style="flex:1;">배경 제거 실행</button>
         <label class="checkbox"><input type="checkbox" id="bg-precise">정밀</label>
@@ -282,7 +340,18 @@
 
     <!-- 트레이싱 -->
     <details class="panel-section" id="ps-trace">
-      <summary>트레이싱</summary>
+      <summary>트레이싱 <span class="help-icon" data-help="원본 이미지를 가이드로 깔고 그 위에 직접 그리는 모드. 어니언+멀티프레임과 결합 시 모션 작업.
+
+ON: 브러시/지우개가 별도 trace 레이어에만 적용 (원본 보존)
+
+가이드 투명도
+  • 0% — 원본 안 보임 (빈 캔버스에 그리기)
+  • 50% — 원본 살짝 비침 (트레이싱)
+  • 100% — 원본 그대로 (참고만)
+
+트레이스 지우기 — 현재 프레임의 트레이스만 클리어 (원본 보존)
+
+저장 시 출력 모드: 원본만 / 트레이스만 / 합친 결과">?</span></summary>
       <div class="row">
         <label class="checkbox"><input type="checkbox" id="tracing-mode">트레이싱 모드</label>
       </div>
@@ -292,6 +361,32 @@
       </div>
       <div class="row">
         <button id="btn-clear-trace" style="width:100%;">현재 트레이스 지우기</button>
+      </div>
+    </details>
+
+    <!-- 레이어 (프레임 = 레이어) — Photoshop 스타일 패널 -->
+    <details class="panel-section" open id="ps-layers">
+      <summary>레이어 <span id="layer-count" class="badge-count">0</span><span class="help-icon" data-help="프레임 = 레이어 (Photoshop 컨벤션). 위 = 앞.
+
+각 항목
+  • 👁 표시 토글
+  • 썸네일
+  • 이름 (더블클릭 편집)
+  • 불투명도 슬라이더 (이름 아래)
+
+드래그로 순서 변경 — 애니메이션 순서도 같이 바뀜
+
+모드 (타임라인 좌상단)
+  🎬 애니메이션 — 활성 1장만 표시 (재생 시 순환)
+  🍰 레이어 — 표시(👁) ON 모든 프레임 겹쳐 보기 (불투명도 적용)">?</span></summary>
+      <div class="row" style="padding-bottom:6px; border-bottom:1px solid #333; margin-bottom:6px;">
+        <button id="btn-layers-all-show" style="flex:1; font-size:11px;" title="모든 표시">👁 모두 표시</button>
+        <button id="btn-layers-all-hide" style="flex:1; font-size:11px;" title="모든 숨김">🚫 모두 숨김</button>
+      </div>
+      <div id="layers-list"></div>
+      <div class="modal-info" style="font-size:10px; margin-top:6px; color:#666;">
+        프레임 추가: 상단 [+ 이미지] / 타임라인 [+ 빈 프레임]<br>
+        🎬 활성 1장만 / 🍰 표시 ON 모두 겹쳐 보기 (위 = 앞)
       </div>
     </details>
 
@@ -311,6 +406,6 @@
   </div>
 </div>
 
-<script src="script.js"></script>
+<script src="script.js?v=14"></script>
 </body>
 </html>
