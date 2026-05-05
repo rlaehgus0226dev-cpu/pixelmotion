@@ -137,8 +137,12 @@ function setStatus(text, type = "") {
   }
 }
 function getGridSize() {
-  const sel = document.getElementById("grid-select");
-  return sel ? parseInt(sel.value, 10) : 64;
+  const inp = document.getElementById("grid-input");
+  if (!inp) return 64;
+  let n = parseInt(inp.value, 10);
+  if (isNaN(n) || n < 4) n = 4;
+  if (n > 512) n = 512;
+  return n;
 }
 function getColorLimit() { return parseInt(document.querySelector('input[name="color"]:checked').value, 10); }
 function showGrid() { return $("show-grid").checked; }
@@ -592,6 +596,37 @@ function drawSelectionInternal(ctxEl, slotIdx) {
 }
 
 // ---------- 이미지/프레임 로드 ----------
+const STANDARD_GRIDS = [8, 16, 32, 48, 64, 128, 256];
+
+// 이미지 사이즈에 맞는 권장 격자값
+function suggestGridForImage(w, h) {
+  const minDim = Math.min(w, h);
+  // 16 이상 격자 중 정확히 나뉘는 값들 → 64에 가장 가까운 것 선택
+  const exact = STANDARD_GRIDS.filter(n => minDim % n === 0 && n >= 16);
+  if (exact.length > 0) {
+    return exact.reduce((a, b) => Math.abs(a - 64) < Math.abs(b - 64) ? a : b);
+  }
+  return 64;
+}
+
+// 이미지를 격자 N의 정수배 사이즈로 bilinear 리사이즈 (정렬용)
+function alignImageToGrid(imgData, gridN) {
+  const W = imgData.width, H = imgData.height;
+  const newW = Math.max(gridN, Math.round(W / gridN) * gridN);
+  const newH = Math.max(gridN, Math.round(H / gridN) * gridN);
+  if (newW === W && newH === H) return imgData;
+  const src = document.createElement("canvas");
+  src.width = W; src.height = H;
+  src.getContext("2d").putImageData(imgData, 0, 0);
+  const out = document.createElement("canvas");
+  out.width = newW; out.height = newH;
+  const oc = out.getContext("2d");
+  oc.imageSmoothingEnabled = true;
+  oc.imageSmoothingQuality = "high";
+  oc.drawImage(src, 0, 0, newW, newH);
+  return oc.getImageData(0, 0, newW, newH);
+}
+
 async function loadImageFromFile(file) {
   const url = URL.createObjectURL(file);
   try {
@@ -603,8 +638,36 @@ async function loadImageFromFile(file) {
     c.height = img.naturalHeight;
     const cctx = c.getContext("2d");
     cctx.drawImage(img, 0, 0);
-    const imgData = cctx.getImageData(0, 0, c.width, c.height);
-    addFrame(imgData, file.name);
+    let imgData = cctx.getImageData(0, 0, c.width, c.height);
+    const W = imgData.width, H = imgData.height;
+    const autoCleanup = document.getElementById("auto-cleanup")?.checked;
+
+    if (autoCleanup) {
+      // A+B: 권장 격자로 input 갱신 + 격자 정렬 리사이즈 + 자동 도트화
+      const useGrid = suggestGridForImage(W, H);
+      const gridInp = document.getElementById("grid-input");
+      if (gridInp) gridInp.value = String(useGrid);
+      imgData = alignImageToGrid(imgData, useGrid);
+      addFrame(imgData, file.name);
+      // 즉시 도트화
+      pixelizeFrame(state.frames[state.frameIdx]);
+      invalidateSourceCache();
+      refreshPalette();
+      renderTimeline();
+      redraw();
+      const sub = getSub();
+      setStatus(`자동 정리: ${W}×${H} → 격자 ${useGrid}${sub > 1 ? `×${sub} 세분` : ''} 도트화 완료`, "success");
+    } else {
+      addFrame(imgData, file.name);
+      // 격자가 안 맞으면 토스트로 추천
+      const curGrid = getGridSize();
+      if (W % curGrid !== 0 || H % curGrid !== 0) {
+        const suggested = suggestGridForImage(W, H);
+        if (suggested !== curGrid) {
+          setStatus(`${W}×${H} 추가 — 격자 ${suggested} 추천 (정확히 나뉨). 탑바 [AI 자동 정리] ON 시 한번에 처리.`);
+        }
+      }
+    }
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -693,11 +756,9 @@ function expandResolutionFactor(factor) {
   // sub UI를 1로 리셋 (이미 충분히 잘게)
   const subSel = document.getElementById("sub-select");
   if (subSel) subSel.value = "1";
-  // 격자 select에 source 해상도와 매칭되는 값이 있으면 자동 선택
-  const gridSel = document.getElementById("grid-select");
-  if (gridSel && Array.from(gridSel.options).some(o => o.value === String(newW))) {
-    gridSel.value = String(newW);
-  }
+  // 격자 input을 새 도트 수로 업데이트 (자유 입력이라 항상 가능)
+  const gridInp = document.getElementById("grid-input");
+  if (gridInp) gridInp.value = String(Math.min(512, newW));
   state.selection = null;
   state.draftSelection = null;
   invalidateSourceCache();
@@ -1249,7 +1310,10 @@ async function applyPixelize() {
 
 $("btn-pixelize").addEventListener("click", applyPixelize);
 
-document.getElementById("grid-select")?.addEventListener("change", () => {
+document.getElementById("grid-input")?.addEventListener("change", (e) => {
+  // 입력 정상화 (clamp)
+  const n = getGridSize();
+  if (e.target.value !== String(n)) e.target.value = String(n);
   if (resizeBlankCanvas()) return;
   if (state.pixelized) applyPixelize(); else redraw();
 });

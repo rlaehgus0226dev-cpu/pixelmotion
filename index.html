@@ -5,7 +5,7 @@
 <title>PixelMotion</title>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js"></script>
-<link rel="stylesheet" href="style.css?v=15">
+<link rel="stylesheet" href="style.css?v=17">
 </head>
 <body>
 
@@ -17,15 +17,19 @@
   <button id="btn-undo" disabled title="되돌리기 (Ctrl+Z)">↶</button>
   <div class="topbar-divider"></div>
   <label class="topbar-label">격자
-    <select id="grid-select">
-      <option value="8">8</option>
-      <option value="16">16</option>
-      <option value="32">32</option>
-      <option value="48">48</option>
-      <option value="64" selected>64</option>
-      <option value="128">128</option>
-      <option value="256">256</option>
-    </select>
+    <input type="number" id="grid-input" value="64" min="4" max="512" step="1" style="width:60px;" list="grid-presets" title="짧은 변의 도트 수. 4~512 사이 자유 입력 / 권장: 8/16/24/32/36/48/64/96/128/256">
+    <datalist id="grid-presets">
+      <option value="8"></option>
+      <option value="16"></option>
+      <option value="24"></option>
+      <option value="32"></option>
+      <option value="36"></option>
+      <option value="48"></option>
+      <option value="64"></option>
+      <option value="96"></option>
+      <option value="128"></option>
+      <option value="256"></option>
+    </datalist>
   </label>
   <label class="topbar-label">세분
     <select id="sub-select">
@@ -37,6 +41,7 @@
   </label>
   <label class="checkbox"><input type="checkbox" id="show-grid" checked>격자</label>
   <label class="checkbox"><input type="checkbox" id="show-subgrid" checked>세분 라인</label>
+  <label class="checkbox" title="이미지 import 시 격자에 맞게 자동 리사이즈 + 도트화 즉시 실행 (AI 이미지에 권장)"><input type="checkbox" id="auto-cleanup">AI 자동 정리</label>
   <button id="btn-preview" title="재생 미리보기 모달 (1×/2×/4× 동시)">▶ 미리보기</button>
   <button id="btn-shortcuts" title="단축키 (F1)">⌨ 단축키</button>
   <div id="file-info"></div>
@@ -307,21 +312,25 @@
       </div>
     </details>
 
-    <!-- 해상도 -->
+    <!-- 격자 추가 (디테일 단계) -->
     <details class="panel-section" open id="ps-res">
-      <summary>해상도 <span id="res-current" class="badge-count"></span><span class="help-icon" data-help="NEAREST 정수배 확대.
+      <summary>격자 추가 (디테일 단계) <span id="res-current" class="badge-count"></span><span class="help-icon" data-help="현재 도트 캔버스를 그대로 보존하며 격자를 더 잘게 나눔.
 
-각 도트가 N×N 도트로 복제됩니다 (색은 그대로).
+매 클릭마다 각 도트가 N×N 블록으로 분할 (NEAREST). 색은 그대로 복제되고, 추가 칠하기로 그 안에 디테일 채워 넣을 수 있음.
 
-작업 흐름 예
-  16×16 러프 → ×2 → 32×32 디테일 추가
-  → ×2 → 64×64 마감 → 저장
+권장 흐름
+  1. 작은 격자(예: 36)로 캔버스 시작 — 큰 틀 대략 그리기
+  2. [×4] 클릭 → 144×144 — 그 안에 디테일 추가
+  3. 다시 [×2] → 288×288 — 더 세밀한 부분
+  4. 만족하면 저장
+
+원본 절대 훼손 안 됨 — 그린 도트는 ×N 블록으로 그대로 보존됨.
 
 확대 후 sub(세분화)는 자동 1로 리셋.
 
-비정수배(예: 6→8)는 도트 크기 불균일해서 미지원.">?</span></summary>
+비정수배(예: 36→48 직행)는 도트 크기 불균일해서 미지원. 단계별로만.">?</span></summary>
       <div class="row-stack">
-        <span class="row-stack-label">정수배 확대 (NEAREST)</span>
+        <span class="row-stack-label">현재 → ×N 분할 (NEAREST 보존)</span>
         <div class="radio-group">
           <button class="res-btn" data-factor="2">×2</button>
           <button class="res-btn" data-factor="3">×3</button>
@@ -415,6 +424,6 @@ ON: 브러시/지우개가 별도 trace 레이어에만 적용 (원본 보존)
   </div>
 </div>
 
-<script src="script.js?v=15"></script>
+<script src="script.js?v=17"></script>
 </body>
 </html>
