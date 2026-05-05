@@ -421,6 +421,17 @@ input[type=file] { display: none; }
 #active-color-box { width: 100%; height: 36px; border: 1px solid #555; background: #888; border-radius: 4px; cursor: pointer; position: relative; }
 #active-color-box:hover { border-color: #4a8; }
 #active-color-box::after { content: attr(data-rgb); position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: rgba(255,255,255,0.85); text-shadow: 0 0 2px rgba(0,0,0,0.85), 0 0 1px rgba(0,0,0,0.85); font-family: Consolas, monospace; font-size: 11px; font-weight: bold; pointer-events: none; }
+
+#shade-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; margin-top: 4px; }
+#shade-strip .shade-cell { aspect-ratio: 1; border: 1px solid #444; cursor: pointer; min-height: 22px; border-radius: 2px; position: relative; }
+#shade-strip .shade-cell:hover { outline: 1px solid #4a8; }
+#shade-strip .shade-cell::after {
+  content: attr(data-label);
+  position: absolute; bottom: 1px; left: 50%; transform: translateX(-50%);
+  color: rgba(255,255,255,0.85); text-shadow: 0 0 2px #000, 0 0 1px #000;
+  font-family: Consolas, monospace; font-size: 9px; font-weight: bold;
+  pointer-events: none;
+}
 #palette-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; }
 .palette-cell { aspect-ratio: 1; border: 1px solid #444; cursor: pointer; min-height: 22px; border-radius: 2px; }
 .palette-cell:hover { outline: 1px solid #4a8; }

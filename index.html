@@ -5,7 +5,7 @@
 <title>PixelMotion</title>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js"></script>
-<link rel="stylesheet" href="style.css?v=19">
+<link rel="stylesheet" href="style.css?v=20">
 </head>
 <body>
 
@@ -112,6 +112,10 @@
         </div>
       </div>
 
+      <div class="row">
+        <label class="checkbox" title="브러시·지우개에서 캔버스 수직 중앙축으로 좌우 자동 미러"><input type="checkbox" id="symmetry-h"> ↔ 좌우 대칭 (브러시 미러)</label>
+      </div>
+
       <div class="row-stack">
         <span class="row-stack-label">빈 도트 채움 방식 <span style="color:#666; font-size:10px;">(선택 영역)</span></span>
         <div class="radio-group">
@@ -145,6 +149,7 @@
       <div class="row-stack">
         <span class="row-stack-label">활성 색 (클릭 → 픽커)</span>
         <div id="active-color-box" data-rgb="—" title="클릭해서 색 픽커 열기"></div>
+        <div id="shade-strip" title="활성 색의 명암 단계 4개 — 클릭으로 활성"></div>
         <div id="color-picker">
           <div id="picker-area"><div id="picker-marker" style="left:0%; top:100%;"></div></div>
           <div id="picker-hue"><div id="hue-marker" style="left:0%;"></div></div>
@@ -443,6 +448,6 @@ ON: 브러시/지우개가 별도 trace 레이어에만 적용 (원본 보존)
   </div>
 </div>
 
-<script src="script.js?v=19"></script>
+<script src="script.js?v=20"></script>
 </body>
 </html>

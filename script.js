@@ -2161,6 +2161,38 @@ function renderActiveColor() {
   const c = state.activeColor;
   box.style.backgroundColor = `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
   box.dataset.rgb = `${c[0]}, ${c[1]}, ${c[2]}`;
+  renderShadeStrip();
+}
+
+// 활성 색의 명암 단계 4개 (V −25%, −12%, +12%, +25%) 자동 표시
+const SHADE_STEPS = [
+  { d: -0.25, label: "−−" },
+  { d: -0.12, label: "−" },
+  { d:  0.12, label: "+" },
+  { d:  0.25, label: "++" },
+];
+function renderShadeStrip() {
+  const strip = $("shade-strip");
+  if (!strip) return;
+  const c = state.activeColor;
+  const [h, s, v] = rgbToHsv(c[0], c[1], c[2]);
+  strip.innerHTML = "";
+  SHADE_STEPS.forEach(step => {
+    const newV = Math.max(0, Math.min(1, v + step.d));
+    const sc = hsvToRgb(h, s, newV);
+    const cell = document.createElement("div");
+    cell.className = "shade-cell";
+    cell.style.backgroundColor = `rgb(${sc[0]}, ${sc[1]}, ${sc[2]})`;
+    cell.dataset.label = step.label;
+    cell.title = `명도 ${step.d > 0 ? '+' : ''}${Math.round(step.d * 100)}%  →  RGB(${sc[0]}, ${sc[1]}, ${sc[2]})`;
+    cell.addEventListener("click", () => {
+      state.activeColor = sc.slice();
+      renderActiveColor();
+      renderPalette();
+      if ($("color-picker").classList.contains("show")) syncPickerFromActive();
+    });
+    strip.appendChild(cell);
+  });
 }
 
 function renderPalette() {
@@ -2465,6 +2497,21 @@ function paintOne(ix, iy, tool, color) {
 }
 
 function paintPixel(ix, iy, tool) {
+  _paintPixelOnce(ix, iy, tool);
+  // 좌우 대칭 (수직 중앙축)
+  if (document.getElementById("symmetry-h")?.checked) {
+    const target = getEditTarget();
+    if (target) {
+      const mx = target.width - 1 - ix;
+      if (mx !== ix && mx >= 0 && mx < target.width) {
+        _paintPixelOnce(mx, iy, tool);
+      }
+    }
+  }
+  return true;
+}
+
+function _paintPixelOnce(ix, iy, tool) {
   const size = getBrushSize();
   if (size === "cell") {
     const target = getEditTarget();
