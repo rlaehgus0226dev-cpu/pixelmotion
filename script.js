@@ -2578,10 +2578,12 @@ document.querySelectorAll('input[name="tool"]').forEach((r) => {
   });
 });
 
-// select-mode 라디오 변경 → 도구 활성 상태에서만 실제 도구도 전환
+// select-mode 라디오 변경 → 무조건 선택 도구로 전환 (현재 도구 무관)
+// 즉 브러시 사용 중이라도 사각형/올가미 클릭 시 즉시 그 도구로 전환됨
+// 부모 "선택" 라디오는 setTool 안에서 자동 ON/OFF 동기화
 document.querySelectorAll('input[name="select-mode"]').forEach((r) => {
   r.addEventListener("change", () => {
-    if (isSelectTool(_activeTool)) setTool(r.value);
+    setTool(r.value);
   });
 });
 
